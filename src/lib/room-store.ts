@@ -33,7 +33,7 @@ export async function getRecord(
   if (!room)
     throw new HttpError(404, "This room does not exist or has expired.");
   if (!allowEnded && (room.state === "ENDED" || room.expiresAt <= Date.now()))
-    throw new HttpError(410, "This livestream has ended.");
+    throw new HttpError(410, "This study room has ended.");
   return room;
 }
 // Atomic transition; an ended room can never become LIVE again. Preserve its TTL.
@@ -52,7 +52,7 @@ export async function transition(id: string, next: "LIVE" | "ENDED") {
     [next],
   );
   if (result === 0) throw new HttpError(404, "Room not found.");
-  if (result === -1) throw new HttpError(410, "This livestream has ended.");
+  if (result === -1) throw new HttpError(410, "This study room has ended.");
 }
 export async function rateLimit(scope: string, limit: number, seconds: number) {
   const count = await redis().eval<[string], number>(

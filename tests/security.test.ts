@@ -33,7 +33,7 @@ test("validation rejects oversized, blank, malformed, and control-character inpu
   for (const value of ["", " ", "x".repeat(501), {}, null])
     assert.equal(chatText(value), null);
 });
-test("signed viewer tokens cannot publish media, administer rooms, or change metadata", async () => {
+test("all participants can publish media, but cannot administer rooms or change metadata", async () => {
   process.env.LIVEKIT_URL = "wss://test.livekit.cloud";
   process.env.LIVEKIT_API_KEY = "test-key";
   process.env.LIVEKIT_API_SECRET = "test-secret-with-at-least-32-characters";
@@ -48,18 +48,22 @@ test("signed viewer tokens cannot publish media, administer rooms, or change met
     await issueToken(id, "Viewer", false, "viewer-test"),
   );
   assert.equal(viewer.video?.room, `studyflow-${id}`);
-  assert.equal(viewer.video?.canPublish, false);
+  assert.equal(viewer.video?.canPublish, true);
   assert.equal(viewer.video?.canSubscribe, true);
   assert.equal(viewer.video?.canPublishData, true);
   assert.equal(viewer.video?.canUpdateOwnMetadata, false);
   assert.notEqual(viewer.video?.roomAdmin, true);
   assert.notEqual(viewer.video?.roomCreate, true);
-  assert.equal(JSON.parse(viewer.metadata!).role, "viewer");
+  assert.equal(JSON.parse(viewer.metadata!).role, "participant");
   assert.ok(viewer.exp! - viewer.nbf! <= 60);
+  assert.equal(viewer.roomConfig?.maxParticipants, 6);
+  assert.deepEqual(viewer.video?.canPublishSources, ["camera", "microphone", "screen_share", "screen_share_audio"]);
   const host = await verify.verify(
     await issueToken(id, "Host", true, `host-${id}`),
   );
   assert.equal(host.video?.canPublish, true);
+  assert.deepEqual(host.video, viewer.video);
+  assert.equal(host.roomConfig?.maxParticipants, 6);
   assert.deepEqual(host.video?.canPublishSources, [
     "camera",
     "microphone",

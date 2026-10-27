@@ -12,7 +12,7 @@ import { TokenVerifier } from "livekit-server-sdk";
 
 // Contract tests use the real SDKs and handlers with stubbed external HTTP services.
 // They do not validate actual Upstash Lua execution or LiveKit transport.
-test("room API contracts: credential privacy, forged roles, host refresh, lifecycle, rate limiting, CSRF", async (t) => {
+test("room API contracts: credential privacy, shared publishing, unique identities, forged admin roles, lifecycle, rate limiting, CSRF", async (t) => {
   Object.assign(process.env, {
     LIVEKIT_URL: "wss://test.livekit.cloud",
     LIVEKIT_API_KEY: "test-key",
@@ -31,16 +31,24 @@ test("room API contracts: credential privacy, forged roles, host refresh, lifecy
     expiresAt: Date.now() + 3600000,
   };
   let count = 0;
+  let providerCap = 6;
+  let recordExists = true;
   t.mock.method(
     globalThis,
     "fetch",
     async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("test.livekit.cloud")) {
+        assert.ok(String(url).endsWith("/CreateRoom"));
+        const config = JSON.parse(String(init?.body));
+        assert.equal(config.maxParticipants, 6);
+        return Response.json({ name: config.name, sid: "RM_test", maxParticipants: providerCap });
+      }
       assert.match(String(url), /^https:\/\/test.upstash.io/);
       const parsed = JSON.parse(String(init?.body));
       function command(args: unknown[]) {
         const cmd = String(args[0]).toLowerCase();
         let result: unknown;
-        if (cmd === "get") result = JSON.stringify(record);
+        if (cmd === "get") result = recordExists ? JSON.stringify(record) : null;
         else if (cmd === "eval") {
           const script = String(args[1]);
           if (script.includes("INCR")) result = ++count;
@@ -92,7 +100,7 @@ test("room API contracts: credential privacy, forged roles, host refresh, lifecy
     process.env.LIVEKIT_API_KEY!,
     process.env.LIVEKIT_API_SECRET!,
   );
-  assert.equal((await verifier.verify(viewer.token)).video?.canPublish, false);
+  assert.equal((await verifier.verify(viewer.token)).video?.canPublish, true);
   const hostRequest = request("/token", true, { nickname: "Ignored" });
   assert.equal(hostRequest.cookies.get(hostCookie(id))?.value, credential);
   response = await token(hostRequest, context);
@@ -101,6 +109,18 @@ test("room API contracts: credential privacy, forged roles, host refresh, lifecy
   const claims = await verifier.verify(host.token);
   assert.equal(claims.name, "Ada");
   assert.equal(claims.video?.canPublish, true);
+  assert.match(claims.sub!, /^participant-[a-f0-9-]+$/);
+  const secondHost = await (await token(request("/token", true, { nickname: "Ada" }), context)).json();
+  assert.notEqual((await verifier.verify(secondHost.token)).sub, claims.sub);
+  assert.notEqual((await verifier.verify(viewer.token)).sub, claims.sub);
+  assert.deepEqual((await verifier.verify(viewer.token)).video, claims.video);
+  assert.equal(claims.roomConfig?.maxParticipants, 6);
+  providerCap = 100;
+  assert.equal((await token(request("/token", false, { nickname: "Legacy" }), context)).status, 409);
+  providerCap = 6;
+  recordExists = false;
+  assert.equal((await token(request("/token", false, { nickname: "Missing" }), context)).status, 404);
+  recordExists = true;
   assert.equal((await start(request("/start"), context)).status, 403);
   assert.equal((await end(request("/end"), context)).status, 403);
   assert.equal((await start(request("/start", true), context)).status, 200);
@@ -167,7 +187,8 @@ test("creation reserves a provider room and stores only a hashed credential in R
       if (String(url).includes("test.livekit.cloud")) {
         assert.ok(String(url).endsWith("/CreateRoom"));
         providerName = parsed.name;
-        return Response.json({ name: parsed.name, sid: "RM_test" });
+        assert.equal(parsed.maxParticipants, 6);
+        return Response.json({ name: parsed.name, sid: "RM_test", maxParticipants: 6 });
       }
       function command(args: unknown[]) {
         if (String(args[0]).toLowerCase() === "eval") return { result: 1 };

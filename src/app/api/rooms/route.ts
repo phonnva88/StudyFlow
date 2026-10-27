@@ -8,7 +8,7 @@ import {
 import { body, fail, json, limit, sameOrigin } from "@/lib/http";
 import { text } from "@/lib/validation";
 import { createRecord, ROOM_TTL } from "@/lib/room-store";
-import { livekitRoom, roomService } from "@/lib/livekit";
+import { ensureStudyRoom, livekitRoom, roomService } from "@/lib/livekit";
 export const runtime = "nodejs";
 export async function POST(request: NextRequest) {
   try {
@@ -20,12 +20,7 @@ export async function POST(request: NextRequest) {
     const id = newRoomId();
     const credential = newHostCredential();
     const service = roomService();
-    await service.createRoom({
-      name: livekitRoom(id),
-      emptyTimeout: ROOM_TTL,
-      departureTimeout: ROOM_TTL,
-      maxParticipants: 100,
-    });
+    await ensureStudyRoom(id);
     try {
       await createRecord({
         id,
