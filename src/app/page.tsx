@@ -1,12 +1,14 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import Link from 'next/link';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowRight, ArrowUpRight, Check, Headphones, LoaderCircle,
+  ArrowRight, Check, Headphones, LoaderCircle,
   MessageCircle, MonitorUp, Radio, ShieldCheck, Video,
 } from 'lucide-react';
 import { Brand } from '@/components/brand';
+import { SiteHeader } from '@/components/site-header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -14,7 +16,6 @@ import { Label } from '@/components/ui/label';
 
 export default function Home() {
   const router = useRouter();
-  const form = useRef<HTMLFormElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -27,7 +28,7 @@ export default function Home() {
       const response = await fetch('/api/rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: data.get('nickname'), title: data.get('title') }),
+        body: JSON.stringify({ nickname: data.get('nickname'), title: data.get('title'), visibility: data.get('visibility') }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
@@ -38,20 +39,9 @@ export default function Home() {
     }
   }
 
-  function focusForm() {
-    form.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    form.current?.querySelector('input')?.focus({ preventScroll: true });
-  }
-
   return (
     <div className="min-h-screen overflow-hidden">
-      <header className="mx-auto flex h-20 max-w-7xl items-center justify-between border-b border-border/70 px-6 lg:h-24 lg:px-12">
-        <Brand />
-        <nav className="flex items-center gap-5 sm:gap-8">
-          <a href="#how-it-works" className="hidden text-sm text-muted-foreground transition-colors hover:text-foreground sm:inline">How it works</a>
-          <Button variant="outline" size="sm" onClick={focusForm}>Create a room <ArrowUpRight className="size-4" /></Button>
-        </nav>
-      </header>
+      <SiteHeader />
 
       <main>
         <section className="mx-auto grid max-w-6xl items-center gap-12 px-6 py-14 sm:py-20 lg:grid-cols-[1.1fr_0.9fr] lg:gap-20 lg:px-10 lg:py-24">
@@ -65,6 +55,7 @@ export default function Home() {
             <p className="mt-7 max-w-lg text-base leading-8 text-muted-foreground sm:text-lg">
               Turn your solo study session into a shared one.<br className="hidden sm:block" /> Go live, invite your people, and find your flow.
             </p>
+            <Button asChild variant="outline" className="mt-6"><Link href="/explore">Explore Rooms <ArrowRight /></Link></Button>
             <div className="mt-6 flex flex-wrap gap-x-5 gap-y-3 text-xs text-secondary-foreground">
               {['No sign-up', 'Just a link', 'Your own space'].map(item => (
                 <span key={item} className="inline-flex items-center gap-1.5"><Check className="size-4 text-primary" />{item}</span>
@@ -76,7 +67,7 @@ export default function Home() {
             </div>
           </div>
 
-          <Card className="border-border/80 bg-card/80 shadow-2xl shadow-black/20 backdrop-blur">
+          <Card id="create-room" className="scroll-mt-6 border-border/80 bg-card/80 shadow-2xl shadow-black/20 backdrop-blur">
             <CardHeader className="gap-4 pb-2">
               <div className="flex items-center justify-between">
                 <span className="flex size-11 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary"><Radio size={22} /></span>
@@ -88,10 +79,17 @@ export default function Home() {
               </div>
             </CardHeader>
             <CardContent>
-              <form ref={form} className="mt-5 space-y-5" onSubmit={create}>
+              <form className="mt-5 space-y-5" onSubmit={create}>
                 <div className="space-y-2"><Label htmlFor="nickname">Your nickname</Label><Input id="nickname" name="nickname" placeholder="What should we call you?" autoComplete="nickname" required maxLength={32} disabled={busy} /></div>
                 <div className="space-y-2"><Label htmlFor="title">Room title</Label><Input id="title" name="title" placeholder="e.g. Late-night library hours" required maxLength={80} disabled={busy} /></div>
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground"><span className="size-1.5 rounded-full bg-primary" />Your room is invite-only. You choose the company.</div>
+                <div className="space-y-2">
+                  <Label htmlFor="visibility">Who can discover your room?</Label>
+                  <select id="visibility" name="visibility" defaultValue="PUBLIC" disabled={busy} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                    <option value="PUBLIC">Public — visible in Explore</option>
+                    <option value="PRIVATE">Invite-only — anyone with your link</option>
+                  </select>
+                  <p className="text-[11px] leading-5 text-muted-foreground">Public rooms welcome everyone. Invite-only rooms stay unlisted; share their link only with your study people.</p>
+                </div>
                 {error && <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-red-200" role="alert">{error}</p>}
                 <Button className="w-full justify-between" disabled={busy}>
                   {busy ? <><LoaderCircle className="size-4 animate-spin" />Creating your room…</> : <>Create Room <ArrowRight className="size-4" /></>}

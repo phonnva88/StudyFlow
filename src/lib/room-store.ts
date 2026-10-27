@@ -9,6 +9,8 @@ export interface StudyRoom {
   hostName: string;
   hostHash: string;
   state: RoomState;
+  // Missing on legacy invite-only rooms. Never publish those implicitly.
+  visibility?: "PUBLIC" | "PRIVATE";
   createdAt: number;
   expiresAt: number;
 }
@@ -35,6 +37,28 @@ export async function getRecord(
   if (!allowEnded && (room.state === "ENDED" || room.expiresAt <= Date.now()))
     throw new HttpError(410, "This study room has ended.");
   return room;
+}
+// Scan the existing TTL-backed records rather than maintaining a second index
+// that could drift from creation/expiry. Suitable for this small-room MVP.
+export async function listPublicRecords(): Promise<StudyRoom[]> {
+  const db = redis();
+  const rooms = new Map<string, StudyRoom>();
+  let cursor = "0";
+  do {
+    const [next, keys]: [string, string[]] = await db.scan(cursor, {
+      match: "studyflow:room:*",
+      count: 100,
+    });
+    cursor = next;
+    for (let offset = 0; offset < keys.length; offset += 100) {
+      const records = await db.mget<(StudyRoom | null)[]>(...keys.slice(offset, offset + 100));
+      for (const room of records) {
+        if (room && room.visibility === "PUBLIC" && room.state !== "ENDED" && room.expiresAt > Date.now())
+          rooms.set(room.id, room);
+      }
+    }
+  } while (String(cursor) !== "0");
+  return [...rooms.values()];
 }
 // Atomic transition; an ended room can never become LIVE again. Preserve its TTL.
 export async function transition(id: string, next: "LIVE" | "ENDED") {
@@ -75,5 +99,7 @@ export const publicRoom = (room: StudyRoom) => ({
   title: room.title,
   hostName: room.hostName,
   state: room.state,
+  visibility: room.visibility ?? "PRIVATE",
+  createdAt: room.createdAt,
   expiresAt: room.expiresAt,
 });
