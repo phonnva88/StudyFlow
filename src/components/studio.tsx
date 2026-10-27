@@ -3,92 +3,109 @@
 import { useState } from 'react';
 import {
   RoomAudioRenderer, StartAudio, VideoTrack, useTracks, useParticipants,
-  useLocalParticipant, useRoomContext, useConnectionState,
+  useLocalParticipant, useRoomContext, useConnectionState, useIsMuted,
+  useParticipantInfo, isTrackReference, type TrackReferenceOrPlaceholder,
 } from '@livekit/components-react';
 import { ConnectionState, Track } from 'livekit-client';
-import { LoaderCircle, LogOut, Mic, MicOff, MonitorUp, Radio, Users, Video, VideoOff } from 'lucide-react';
+import { LoaderCircle, LogOut, Mic, MicOff, MonitorUp, Users, Video, VideoOff } from 'lucide-react';
 import { api, type RoomInfo } from './room-client';
 import { Chat } from './chat';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
-export function Studio({ info, refresh, onEnded }: { info: RoomInfo; refresh: () => void; onEnded: () => void }) {
+function StudyTile({ track }: { track: TrackReferenceOrPlaceholder }) {
+  const { name } = useParticipantInfo({ participant: track.participant });
+  const cameraMuted = useIsMuted(track);
+  const microphoneMuted = useIsMuted({ participant: track.participant, source: Track.Source.Microphone });
+  const screen = track.source === Track.Source.ScreenShare;
+  const nickname = name || 'Guest';
+  return (
+    <article aria-label={`${nickname}${screen ? ' screen share' : ' camera'}`} className={`relative flex aspect-video min-w-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-card ${screen ? 'min-h-52' : ''}`}>
+      {isTrackReference(track) && !cameraMuted ? (
+        <VideoTrack trackRef={track} className={`absolute inset-0 size-full ${screen ? 'object-contain' : 'object-cover'}`} />
+      ) : (
+        <div className="flex flex-col items-center gap-3 p-4 text-muted-foreground">
+          <span className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-xl text-primary" aria-hidden="true">{nickname.slice(0, 1).toUpperCase()}</span>
+          <span className="text-xs">{screen ? 'Screen share paused' : 'Camera off'}</span>
+        </div>
+      )}
+      <div className="absolute inset-x-2 bottom-2 flex items-center justify-between gap-2 rounded-md bg-background/85 px-2 py-1.5 text-xs backdrop-blur">
+        <span className="min-w-0 truncate">{nickname}{track.participant.isLocal ? ' · You' : ''}{screen ? ' · Screen' : ''}</span>
+        <span aria-label={microphoneMuted ? 'Microphone muted' : 'Microphone on'}>{microphoneMuted ? <MicOff className="size-4 text-muted-foreground" /> : <Mic className="size-4 text-primary" />}</span>
+      </div>
+    </article>
+  );
+}
+
+export function Studio({ info, onEnded, onLeave }: { info: RoomInfo; onEnded: () => void; onLeave: () => void }) {
   const room = useRoomContext();
   const connection = useConnectionState();
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
   const participants = useParticipants();
-  const tracks = useTracks([Track.Source.ScreenShare, Track.Source.Camera]);
-  const hostIdentity = `host-${info.id}`;
-  const host = participants.find(participant => participant.identity === hostIdentity);
-  const hostTracks = tracks.filter(track => track.participant.identity === hostIdentity);
-  const screen = hostTracks.find(track => track.source === Track.Source.ScreenShare);
-  const camera = hostTracks.find(track => track.source === Track.Source.Camera);
-  const main = screen || camera;
+  const tracks = useTracks([
+    { source: Track.Source.Camera, withPlaceholder: true },
+    { source: Track.Source.ScreenShare, withPlaceholder: false },
+  ], { onlySubscribed: false });
+  const screens = tracks.filter(track => track.source === Track.Source.ScreenShare);
+  // Exactly one camera (or placeholder) per identity, independent of screen shares.
+  const cameras = [...new Map(tracks.filter(track => track.source === Track.Source.Camera).map(track => [track.participant.identity, track])).values()];
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const screenSupported = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
   async function action(fn: () => Promise<unknown>) {
     setBusy(true); setError('');
     try { await fn(); }
-    catch (event) { setError(event instanceof Error ? event.message : 'Action failed. Check device permissions and try again.'); }
+    catch (event) {
+      const name = event instanceof Error ? event.name : '';
+      setError(name === 'NotAllowedError' || name === 'PermissionDeniedError'
+        ? 'Permission was denied or screen sharing was cancelled. Allow device access in your browser and try again.'
+        : name === 'NotFoundError' || name === 'DevicesNotFoundError'
+          ? 'No matching device was found. Connect a camera or microphone and try again.'
+          : event instanceof Error ? event.message : 'Action failed. Check device permissions and try again.');
+    }
     finally { setBusy(false); }
   }
-
-  async function start() {
-    if (!isCameraEnabled && !isScreenShareEnabled) await localParticipant.setCameraEnabled(true);
-    await api(`/api/rooms/${info.id}/start`);
-    refresh();
-  }
+  const connected = connection === ConnectionState.Connected;
 
   return (
     <main className="mx-auto grid max-w-7xl gap-5 px-4 pb-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <section className="min-w-0">
-        <div className="relative flex aspect-video min-h-60 items-center justify-center overflow-hidden rounded-xl border border-border bg-card">
-          <div className="absolute inset-x-4 top-4 z-10 flex items-center justify-between">
-            <span className="inline-flex items-center gap-2 rounded-md border border-border bg-background/80 px-3 py-2 text-[10px] tracking-wider backdrop-blur"><span className={`size-2 rounded-full ${connection === ConnectionState.Reconnecting ? 'bg-amber-400' : 'bg-primary'}`} />{connection === ConnectionState.Reconnecting ? 'RECONNECTING' : info.state === 'LIVE' ? 'LIVE SESSION' : 'STUDIO PREVIEW'}</span>
-            <span className="inline-flex items-center gap-2 rounded-md border border-border bg-background/80 px-3 py-2 text-xs backdrop-blur"><Users className="size-4" />{participants.filter(participant => participant.identity !== hostIdentity).length}</span>
-          </div>
-          {main ? <VideoTrack trackRef={main} className="absolute inset-0 size-full object-contain" /> : (
-            <div className="max-w-md px-5 text-center">
-              <span className="mx-auto mb-5 flex size-16 items-center justify-center rounded-full border border-primary/20 bg-primary/10 text-primary">{connection !== ConnectionState.Connected ? <LoaderCircle className="animate-spin" /> : <Radio />}</span>
-              <h2 className="text-xl font-medium">{connection !== ConnectionState.Connected ? 'Connecting to your space…' : info.isHost ? 'Make yourself at home.' : !host ? 'Waiting for your host' : 'A quiet moment.'}</h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{info.isHost ? 'Turn on your camera or share your screen to begin.' : !host ? 'They’ll be here soon. Your session will appear here.' : 'The host’s camera is off. Audio and chat are still available.'}</p>
-            </div>
-          )}
-          {screen && camera && <div className="absolute bottom-4 right-4 aspect-video w-1/4 overflow-hidden rounded-lg border border-primary/50 bg-card"><VideoTrack trackRef={camera} className="size-full object-cover" /></div>}
-          <span className="absolute bottom-4 left-4 rounded bg-background/80 px-2 py-1 text-xs backdrop-blur">{info.hostName}{info.isHost ? ' · You' : ''}</span>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground" role="status">
+          <span className="inline-flex items-center gap-2">{!connected && <LoaderCircle className="size-4 animate-spin" />}{connected ? 'Everyone can share. Make yourself at home.' : connection === ConnectionState.Reconnecting || connection === ConnectionState.SignalReconnecting ? 'Reconnecting… Your place is kept while we reconnect.' : 'Connecting to your study room…'}</span>
+          <span className="inline-flex items-center gap-2"><Users className="size-4" />{participants.length}/6 participants</span>
         </div>
+        {!!screens.length && <section aria-label="Shared screens" className={`mb-4 grid gap-3 ${screens.length > 1 ? 'md:grid-cols-2' : ''}`}>
+          {screens.map(track => <StudyTile key={`${track.participant.identity}:screen`} track={track} />)}
+        </section>}
+        <section aria-label="Study participants" className={`grid gap-3 ${cameras.length > 1 ? 'sm:grid-cols-2' : ''} ${cameras.length > 4 && !screens.length ? 'xl:grid-cols-3' : ''}`}>
+          {cameras.map(track => <StudyTile key={track.participant.identity} track={track} />)}
+        </section>
         <RoomAudioRenderer />
-        <StartAudio label="Enable livestream audio" className="mt-3 rounded-md border border-border bg-secondary px-3 py-2 text-sm text-secondary-foreground hover:bg-accent" />
+        <StartAudio label="Enable room audio" className="mt-3 rounded-md border border-border bg-secondary px-3 py-2 text-sm text-secondary-foreground hover:bg-accent" />
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-border py-4">
-          {info.isHost ? <>
-            <div className="mr-auto flex flex-wrap gap-2">
-              <Button variant={isCameraEnabled ? 'secondary' : 'outline'} size="sm" disabled={busy || connection !== ConnectionState.Connected} onClick={() => void action(() => localParticipant.setCameraEnabled(!isCameraEnabled))} aria-label={isCameraEnabled ? 'Turn camera off' : 'Turn camera on'}>{isCameraEnabled ? <Video /> : <VideoOff />}Camera</Button>
-              <Button variant={isMicrophoneEnabled ? 'secondary' : 'outline'} size="sm" disabled={busy || connection !== ConnectionState.Connected} onClick={() => void action(() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled))} aria-label={isMicrophoneEnabled ? 'Mute microphone' : 'Enable microphone'}>{isMicrophoneEnabled ? <Mic /> : <MicOff />}Mic</Button>
-              <Button variant={isScreenShareEnabled ? 'secondary' : 'outline'} size="sm" disabled={busy || connection !== ConnectionState.Connected} onClick={() => void action(() => localParticipant.setScreenShareEnabled(!isScreenShareEnabled, { audio: true }))}><MonitorUp />{isScreenShareEnabled ? 'Stop sharing' : 'Share screen'}</Button>
-            </div>
-            {info.state !== 'LIVE' && <Button disabled={busy || connection !== ConnectionState.Connected} onClick={() => void action(start)}><Radio />Go live</Button>}
-            <Button variant="destructive" size="sm" disabled={busy} onClick={() => setConfirmEnd(true)}>End stream</Button>
-          </> : <>
-            <p className="mr-auto text-xs text-muted-foreground">You’re here to focus. Settle in.</p>
-            <Button variant="outline" size="sm" onClick={() => void room.disconnect()}><LogOut />Leave</Button>
-          </>}
+        <div role="toolbar" aria-label="Your media controls" className="sticky bottom-0 z-20 mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-background/95 p-3 backdrop-blur">
+          <Button variant={isCameraEnabled ? 'secondary' : 'outline'} size="sm" disabled={busy || !connected} onClick={() => void action(() => localParticipant.setCameraEnabled(!isCameraEnabled))} aria-pressed={isCameraEnabled} aria-label={isCameraEnabled ? 'Turn camera off' : 'Turn camera on'}>{isCameraEnabled ? <Video /> : <VideoOff />}Camera</Button>
+          <Button variant={isMicrophoneEnabled ? 'secondary' : 'outline'} size="sm" disabled={busy || !connected} onClick={() => void action(() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled))} aria-pressed={isMicrophoneEnabled} aria-label={isMicrophoneEnabled ? 'Mute microphone' : 'Enable microphone'}>{isMicrophoneEnabled ? <Mic /> : <MicOff />}Mic</Button>
+          <Button variant={isScreenShareEnabled ? 'secondary' : 'outline'} size="sm" disabled={busy || !connected || !screenSupported} aria-pressed={isScreenShareEnabled} onClick={() => void action(() => localParticipant.setScreenShareEnabled(!isScreenShareEnabled, { audio: true }))}><MonitorUp />{isScreenShareEnabled ? 'Stop sharing' : 'Share screen'}</Button>
+          <Button variant="outline" size="sm" className="sm:ml-auto" onClick={() => { void room.disconnect(); onLeave(); }}><LogOut />Leave</Button>
+          {info.isHost && <Button variant="destructive" size="sm" disabled={busy} onClick={() => setConfirmEnd(true)}>End room</Button>}
         </div>
+        {!screenSupported && <p className="mt-3 text-xs text-muted-foreground">Screen sharing is unavailable in this browser. Try desktop Chrome or Edge over HTTPS.</p>}
         {error && <p className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-red-200" role="alert">{error}</p>}
-        <p className="mt-4 text-xs leading-5 text-muted-foreground">{info.isHost ? 'Only you can broadcast. Your invite link lets viewers watch and chat.' : 'Enjoy the session. Your camera and microphone stay private.'}</p>
+        <p className="mt-4 text-xs leading-5 text-muted-foreground">Camera and microphone start off. Anyone can share; leaving keeps the room open for everyone else.</p>
 
-        <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
+        {info.isHost && <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
           <DialogContent>
-            <DialogHeader><DialogTitle>Call it a session?</DialogTitle><DialogDescription>Ending the livestream disconnects everyone and closes this room permanently.</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle>End this study room?</DialogTitle><DialogDescription>This disconnects everyone and closes the room permanently. To leave it open, use Leave instead.</DialogDescription></DialogHeader>
             <DialogFooter className="mt-4">
               <Button variant="outline" onClick={() => setConfirmEnd(false)}>Keep studying</Button>
               <Button variant="destructive" disabled={busy} onClick={() => void action(async () => { await api(`/api/rooms/${info.id}/end`); onEnded(); })}>{busy ? 'Ending…' : 'End for everyone'}</Button>
             </DialogFooter>
             {error && <p className="text-sm text-destructive" role="alert">{error} Retry ending to finish closing the media session.</p>}
           </DialogContent>
-        </Dialog>
+        </Dialog>}
       </section>
       <Chat />
     </main>

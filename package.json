@@ -1,7 +1,7 @@
 {
   "name": "studyflow",
   "version": "1.0.0",
-  "description": "Invite-only study livestreams that help students and friends stay focused together.",
+  "description": "Collaborative study rooms where students and friends share cameras, screens, and focus.",
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
     "build": "next build",

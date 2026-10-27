@@ -1,6 +1,8 @@
 # StudyFlow
 
-StudyFlow gives students and study groups a online room to study together: a host can share a camera, microphone, or screen while invited viewers watch and chat. It is for people who want a little company and focus during a study session.
+StudyFlow gives students, study groups, and friends a private online room to study together. Up to six people can independently share their webcam, microphone, and screen, watch each other, and chat without accounts or host approval.
+
+Built with Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, official LiveKit React components, LiveKit Cloud, and Upstash Redis. Media and chat are not recorded or stored.
 
 ## Installation
 
@@ -13,49 +15,52 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open the application on port 3000. Browser media APIs need HTTPS or localhost. Missing service configuration produces an explicit setup error.
+Open port 3000. Camera/microphone APIs need HTTPS or localhost. Missing service configuration produces an explicit setup error; there is no demo backend.
 
-### LiveKit Cloud
+### Service configuration
 
-1. Create a project at https://cloud.livekit.io/.
-2. Copy its secure WebSocket URL, API key, and API secret into `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` in `.env.local`.
-3. Use **LiveKit Cloud**, not a self-hosted server: end-session cleanup uses Cloud token-revocation support. Allow outbound HTTPS to the project hostname from the application server, and LiveKit Cloud WebRTC/WSS traffic from clients.
-4. The application creates rooms through the official server SDK. No webhook or custom signaling server is required.
+No new environment variables are required for Phase 2:
 
-### Durable shared storage
+- `LIVEKIT_URL`: your LiveKit Cloud project's `wss://` URL.
+- `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`: server-side LiveKit credentials.
+- `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`: one shared Upstash Redis database's REST credentials.
 
-Create one Redis database at https://console.upstash.com/. Copy its REST URL and REST token into `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. These are server-only credentials. All deployments that should share room state must use the same database. Do not replace Redis with a process-local Map or disk file.
+Use **LiveKit Cloud**, since ending rooms uses Cloud token revocation. Allow HTTPS to the project hostname from the application server and LiveKit WebRTC/WSS traffic from browsers. All deployments sharing rooms must use the same Redis database. Keep all credentials server-side; never use `NEXT_PUBLIC_` prefixes.
+
+## Collaborative study rooms
+
+1. Enter a nickname and room title to create a room, then select **Enter room**.
+2. Copy the invitation link. Other people enter their nicknames and select **Join study room**.
+3. Every participant can toggle their own camera, microphone, and screen share. All devices start **off**; joining does not request camera/microphone permission.
+4. Cameras appear once per participant, with names, microphone status, and placeholders for disabled cameras. Screen shares appear prominently above the camera grid. Multiple screen shares coexist with camera streams.
+5. Chat uses reliable LiveKit Data Messages. Names come from server-issued participant tokens. There is no persistent chat history; clients retain up to 200 messages per connection.
+6. **Leave** disconnects only you, stops your local tracks, and leaves the room open, including when the creator leaves. A temporary network interruption uses LiveKit's automatic reconnection; a terminal disconnect allows manual rejoining with a fresh token.
+7. Only the creator sees **End room**. Ending permanently closes admission and disconnects everyone. The creator can retry media cleanup if a provider error interrupts it.
+
+Screen sharing uses LiveKit's `getDisplayMedia` integration. It works best in desktop Chromium; browsers without support show an explanation and disable sharing. Capturing system/tab audio depends on the browser and selected source. Browsers may require **Enable room audio** before remote audio plays. Use headphones when testing multiple devices.
+
+## Capacity and authorization
+
+Phase 2 deliberately uses the simpler **six connected participants total**, including the creator and people with all devices off. There is no watch-only overflow or publisher-slot queue.
+
+LiveKit enforces `maxParticipants: 6` at connection admission, including concurrent joins. Slots are freed when LiveKit processes a disconnect; unexpected network loss can temporarily retain a slot during reconnection. A seventh connection is rejected by LiveKit. Issuing a JWT does not reserve a slot. Every join verifies that the provider room has the correct cap, and signed tokens include the same room configuration so automatic room recreation also keeps the limit. Existing Phase 1 rooms with a different provider cap are rejected with a message to create a new room.
+
+All participants receive `canPublish`, `canSubscribe`, and `canPublishData`, limited to camera, microphone, screen video, and screen audio sources. They cannot administer the LiveKit room or change their metadata. Every join, including the creator's, receives a new server-generated UUID identity; nicknames are display names and can be duplicated. Submitted roles and identities do not grant privileges.
+
+Ending the room still requires its creator's room-scoped HttpOnly, SameSite=Strict cookie (Secure in production). The cookie works only on the original origin/browser profile; losing it loses creator controls. Media publishing rights are equal for everyone and do not depend on this cookie.
+
+Room URLs contain 128 random bits; creator credentials contain 256 random bits and only SHA-256 hashes are stored. Same-origin checks, input validation, uncached API responses, and shared Redis request limits protect the API. Token issuance is limited to 40 requests/minute per trusted Vercel client IP; creation to 5/minute. Outside Vercel, a shared fallback bucket avoids trusting arbitrary proxy headers. Nicknames are not verified identities. Anyone with the link can join while the room is active; configure provider spending limits before public promotion.
+
+Rooms expire after 12 hours. APIs stop issuing tokens after expiry/end; connected browsers poll every five seconds and disconnect when closed. Ending marks Redis ENDED before revoking LiveKit participants, waits for unused 15-second join tokens to expire (plus two seconds), disconnects remaining participants, then deletes the provider room. Ending is idempotent and can be retried. Provider outages or unattended expiry still need operational cleanup; this MVP has no scheduled reconciler. Redis expiry alone does not revoke connected media sessions.
 
 ## Deploy to Vercel
 
-1. Push this repository to GitHub and import it into Vercel; select the Next.js framework preset and the repository root directory. Use a Node.js 22 or 24 runtime.
-2. Set all five environment variables from `.env.example` in Vercel project settings. Add them separately to Preview and Production as needed; redeploy after setting or changing them. Never prefix secrets with `NEXT_PUBLIC_`.
-3. Use `npm ci` to install and `npm run build` to build. No custom server, persistent filesystem, or Vercel WebSocket server is needed. LiveKit carries media and chat directly.
-4. Ensure the hosting plan permits the end route's `maxDuration = 60` seconds. End-stream cleanup deliberately waits 17 seconds to drain previously minted join tokens; do not lower the route timeout below this window. Deploy on HTTPS.
-5. Open the actual deployment and run the real-service acceptance check below. A local build alone is not a verified deployment.
-
-The host credential is a room-scoped HttpOnly, SameSite=Strict cookie (Secure in production). A host must create and reopen the room on the **same origin and browser profile**. Sending a link never sends host access. Losing the cookie loses host access; this MVP has no account recovery. Avoid changing deployment domains during a session. Preview deployment protection must permit invited viewers.
-
-## Usage and lifecycle
-
-- Enter a nickname and title, then create a room. The host enters the studio without automatically requesting camera or microphone permission.
-- Turn devices on individually. **Go live** enables a camera if neither camera nor screen is active, then marks the session LIVE. Microphone starts muted; enable it using the Mic control. Sharing system/tab audio depends on browser and selected capture source.
-- Copy the viewer invitation link. Viewers choose a nickname and can subscribe and send chat, but their signed tokens prohibit all media publishing and metadata changes. Only the host cookie authorizes start/end API calls.
-- Camera preview and screen sharing use official LiveKit components and SDKs. Browsers may require clicking “enable livestream audio” for autoplay. Screen sharing works best on desktop Chromium; mobile support varies by platform.
-- A transient host disconnect does not end the room. Viewers see a waiting state, and the host can refresh or rejoin using the cookie. Only the host identity's tracks are rendered.
-- End stream marks the Redis record ENDED **before** provider cleanup, immediately denies new tokens, removes active participants with Cloud token revocation, waits for 15-second unused join JWTs to expire (plus 2 seconds of margin), removes participants again, then deletes the media room. Previously minted but unused JWTs cannot recreate the deleted room after this drain. End is idempotent and can be retried if provider cleanup fails. Cleanup requires a healthy LiveKit API and the route to finish executing.
-- Rooms expire after 12 hours. All metadata requests and token issuance fail closed after expiry. Connected clients poll every five seconds and disconnect on expiry/end; Redis expiry itself is not a scheduled server-side media deletion job.
-- Chat has no durable history. Messages arrive only for connected participants; the UI retains the latest 200 messages during that connection. React escapes message text. Messages are limited to 500 characters; outgoing sends are throttled to one per second, and receivers independently discard excessive messages from each identity. This is basic spam mitigation, not server-enforced LiveKit data bandwidth policing.
-
-## Security and operational limits
-
-Room IDs contain 128 random bits. Host credentials contain 256 random bits and only SHA-256 hashes are stored in Redis. APIs ignore submitted roles. Join JWTs expire after 15 seconds (the established WebRTC session remains connected; LiveKit manages reconnection tokens). Host identity is fixed per room, so one host device is supported. Nicknames are not verified identities and may be duplicated.
-
-Same-origin checks protect mutating APIs. Atomic Redis scripts prevent resurrecting ENDED records and implement shared rate limits: 5 creates and 40 token requests per minute per client IP on Vercel. Outside Vercel, a shared `local` bucket avoids trusting arbitrary forwarded headers; configure a trusted proxy strategy if deploying elsewhere. Redis failure never grants access. Get-room responses omit the credential hash and all API results are uncached.
-
-An end action immediately revokes application access, but completion of media-side revocation depends on LiveKit Cloud. Network failures, a platform function interruption, or a provider-issued reconnection token require provider-side verification and potentially retrying cleanup. Do not treat deleting a room or expiring a Redis record as independently revoking all provider-issued tokens. The acceptance check must include replaying an old token after end against your Cloud project. A production system needing guaranteed cleanup after unattended expiry/provider outages should add a scheduled reconciler; this MVP does not claim that guarantee.
-
-There is no global application login or billing protection. Invite-only means an unpredictable shareable URL, not password-protected membership. Anyone with a link can join while active. Apply project spending limits and platform-level abuse protection before public promotion. No media or chat content is stored by this application.
+1. Import the repository with the Next.js preset and repository root. Use Node.js 22 or 24.
+2. Configure all five server-side variables for each intended Preview/Production environment, then redeploy.
+3. Use `npm ci` and `npm run build`. No separate backend, custom WebSocket server, or database migration is needed.
+4. Keep the end route's `maxDuration = 60`; its token drain deliberately waits 17 seconds. Ensure your plan supports this duration.
+5. Use HTTPS and allow invited users through any preview deployment protection. Keep the creator on the same origin/browser profile.
+6. Run the real-service acceptance checks below before calling multi-streaming verified.
 
 ## Checks
 
@@ -64,29 +69,32 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
-# Browser checks below expect the five app service variables to be absent:
+# Browser tests require the five app service variables to be absent:
 npx playwright install chromium
 npm run test:e2e
-# Or use an existing system Chromium:
+# Or use an existing Chromium:
 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run test:e2e
 ```
 
-`npm test` verifies random credentials, input validation, cryptographically signed token grants, and API authorization/lifecycle contracts using stubbed external HTTP responses. It does **not** prove real Redis Lua execution or real LiveKit transport. Browser tests run against the production build and cover landing form errors, mobile overflow, invalid rooms, and cross-origin rejection. Do not point the browser tests at a configured production service; the form test expects missing credentials.
+Unit/API tests verify signed grants, unique identities, creator-only administration, six-person provider configuration, rejection of legacy uncapped rooms, validation, expiry, rate limits, and ending. External HTTP services are stubbed; these checks do not prove real Redis Lua execution, LiveKit capacity admission, or media transport. Browser checks cover the landing/join flow, mobile layout, missing configuration, and cross-origin rejection.
 
-### Real-service acceptance (required before calling streaming verified)
+### Real-service acceptance
 
-1. Create a room on the HTTPS deployment. As host, test camera permission granted/denied, microphone audio, preview, camera/mic toggles, and desktop screen sharing (with and without captured audio).
-2. Open the link in **two independent viewer browser profiles/devices**. Confirm both see and hear the host; use headphones to avoid feedback. Confirm chat works in both directions and no history is fabricated on a fresh join.
-3. Inspect a viewer token and try publishing via the LiveKit SDK: the provider must reject camera, microphone, and screen tracks. POST start/end without the host cookie and submit forged `role`/`isHost` fields: no privilege escalation should be possible.
-4. Refresh the host page: the same browser retains host control. Open the same URL in a private profile: it must remain a viewer. Interrupt host networking temporarily, reconnect, and confirm the room was not marked ENDED.
-5. End the livestream. Confirm all viewers disconnect, both new joins and old URLs are rejected, and an already-minted join/reconnect token cannot recreate the media room after cleanup. Confirm Cloud revocation behavior for your project. If cleanup fails, retry the end API from the host browser or remove the media room through the LiveKit console.
-6. Check mobile playback/chat, browser autoplay recovery, and screen sharing support on the intended platforms. Confirm rooms cannot issue tokens after the 12-hour expiry and check the intended Vercel function duration in deployment logs.
+Use an HTTPS deployment with actual LiveKit Cloud and Upstash credentials:
+
+1. Create a new room. Join as Alice, Bob, and Charlie using separate browser profiles/devices. Confirm camera/mic permission is not requested until each enables the relevant control.
+2. Enable all three webcams and microphones. Confirm everyone sees three distinct camera tiles with the correct nicknames and microphone states, and hears other participants without local audio feedback. Toggle one person's camera/mic independently; only their own track changes.
+3. Have Bob share a screen while everyone keeps their cameras on. Have Charlie share another screen. Confirm both screens appear above the camera grid and either participant can stop their own share without affecting the other tracks.
+4. Send chat messages in all directions. Try denied permissions, unavailable devices, unsupported mobile screen sharing, and browser audio autoplay recovery.
+5. Join up to six clients. Race additional joins; confirm only six connect. Leave one client and confirm another can join after LiveKit releases the slot. Repeat with abrupt network loss and reconnection. Confirm placeholders and participant tiles update on joins/leaves, with no duplicate camera tiles.
+6. Leave as creator: other participants must remain connected and keep streaming. Rejoin in the same browser to recover End room controls; another profile must not have those controls. POST start/end without the creator cookie or forge role fields: no administrative privileges should be granted.
+7. End the room: everyone must disconnect; fresh joins and old join/reconnection tokens must not recreate the session after cleanup. Retry ending if provider cleanup fails. Verify expiry, mobile layout, and Vercel function duration as well.
 
 ## Project layout
 
-- `src/app`: landing page, room page, and server-only route handlers.
-- `src/components`: host/viewer interface, media controls, live chat.
-- `src/lib`: validation, cookie authentication, Redis lifecycle/rate limits, LiveKit tokens.
-- `tests`: security and API contracts; `tests/browser`: production browser checks.
-
-The repository includes complete integrations and a local production build can run without credentials. Actual room creation, WebRTC, Upstash execution, token revocation, and Vercel deployment still need real credentials and the acceptance check above.
+- `src/app`: landing/room pages and server-only API route handlers.
+- `src/components/studio.tsx`: multi-participant camera grid, screen shares, device controls, and creator-only ending.
+- `src/components/chat.tsx`: existing reliable LiveKit data chat.
+- `src/components/ui`: shadcn/ui component source; theme tokens live in `src/app/globals.css`.
+- `src/lib`: validation, creator-cookie authorization, Redis state/rate limits, and LiveKit configuration/tokens.
+- `tests`: security/API contracts; `tests/browser`: production browser checks.
