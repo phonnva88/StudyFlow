@@ -9,9 +9,11 @@ test("landing form validates and reports missing server configuration honestly",
   await page.getByLabel("Your nickname").fill("Ada");
   await page.getByLabel("Room title").fill("Calculus study session");
   await page.getByRole("button", { name: "Create Room", exact: true }).click();
-  await expect(page.locator(".error[role=alert]")).toContainText(
-    "Streaming is not configured yet",
-  );
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "Streaming is not configured yet" }),
+  ).toContainText("Streaming is not configured yet");
   await expect(
     page.getByRole("button", { name: "Create Room", exact: true }),
   ).toBeEnabled();

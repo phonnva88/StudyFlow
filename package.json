@@ -1,7 +1,7 @@
 {
   "name": "studyflow",
   "version": "1.0.0",
-  "description": "",
+  "description": "Invite-only study livestreams that help students and friends stay focused together.",
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
     "build": "next build",
@@ -27,12 +27,16 @@
     "@livekit/components-react": "^2.9.24",
     "@livekit/components-styles": "^1.2.0",
     "@upstash/redis": "^1.40.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "livekit-client": "^2.23.0",
     "livekit-server-sdk": "^2.19.2",
     "lucide-react": "^1.61.0",
     "next": "^16.4.3",
+    "radix-ui": "^1.8.1",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
