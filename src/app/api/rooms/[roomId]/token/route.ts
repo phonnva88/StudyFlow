@@ -1,10 +1,10 @@
 import { NextRequest } from "next/server";
 import { randomUUID } from "node:crypto";
 import { body, fail, json, limit, sameOrigin } from "@/lib/http";
-import { roomId, text } from "@/lib/validation";
+import { HttpError, roomId, text } from "@/lib/validation";
 import { getRecord, transition } from "@/lib/room-store";
 import { hostCookie, isHost } from "@/lib/auth";
-import { ensureStudyRoom, issueToken } from "@/lib/livekit";
+import { ensureStudyRoom, issueToken, livekitRoom, MAX_PARTICIPANTS, roomService } from "@/lib/livekit";
 import { configuration } from "@/lib/config";
 export const runtime = "nodejs";
 export async function POST(
@@ -19,6 +19,9 @@ export async function POST(
     await limit(request, "join", 40);
     const room = await getRecord(id);
     await ensureStudyRoom(id);
+    const participants = await roomService().listParticipants(livekitRoom(id));
+    if (new Set(participants.map(participant => participant.identity)).size >= MAX_PARTICIPANTS)
+      throw new HttpError(409, "This study room is full. Wait for someone to leave and try again.");
     const host = isHost(
       request.cookies.get(hostCookie(id))?.value,
       room.hostHash,
