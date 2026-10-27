@@ -66,7 +66,7 @@ export function fail(error: unknown) {
       error:
         "The streaming service is temporarily unavailable. Please try again.",
     },
-    { status: 503 },
+    { status: 503, headers: { "Cache-Control": "no-store" } },
   );
 }
 export function json(value: unknown, status = 200) {

@@ -1,6 +1,6 @@
 # StudyFlow
 
-StudyFlow gives students, study groups, and friends a private online room to study together. Up to six people can independently share their webcam, microphone, and screen, watch each other, and chat without accounts or host approval.
+StudyFlow gives students, study groups, and friends public or invite-only rooms to study together. Browse **Explore Rooms** at `/explore`, choose a room, enter a nickname, and join. Up to six people can independently share their webcam, microphone, and screen, watch each other, and chat without accounts or host approval.
 
 Built with Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, official LiveKit React components, LiveKit Cloud, and Upstash Redis. Media and chat are not recorded or stored.
 
@@ -19,7 +19,7 @@ Open port 3000. Camera/microphone APIs need HTTPS or localhost. Missing service 
 
 ### Service configuration
 
-No new environment variables are required for Phase 2:
+Phase 3 reuses the same five environment variables; no new services or variables are required:
 
 - `LIVEKIT_URL`: your LiveKit Cloud project's `wss://` URL.
 - `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`: server-side LiveKit credentials.
@@ -29,7 +29,7 @@ Use **LiveKit Cloud**, since ending rooms uses Cloud token revocation. Allow HTT
 
 ## Collaborative study rooms
 
-1. Enter a nickname and room title to create a room, then select **Enter room**.
+1. Enter a nickname and room title, choose **Public** (the default) or **Invite-only**, create a room, then select **Enter room**. Public rooms appear in Explore immediately, even before anyone joins.
 2. Copy the invitation link. Other people enter their nicknames and select **Join study room**.
 3. Every participant can toggle their own camera, microphone, and screen share. All devices start **off**; joining does not request camera/microphone permission.
 4. Cameras appear once per participant, with names, microphone status, and placeholders for disabled cameras. Screen shares appear prominently above the camera grid. Multiple screen shares coexist with camera streams.
@@ -39,11 +39,31 @@ Use **LiveKit Cloud**, since ending rooms uses Cloud token revocation. Allow HTT
 
 Screen sharing uses LiveKit's `getDisplayMedia` integration. It works best in desktop Chromium; browsers without support show an explanation and disable sharing. Capturing system/tab audio depends on the browser and selected source. Browsers may require **Enable room audio** before remote audio plays. Use headphones when testing multiple devices.
 
+## Public room discovery
+
+Home, Explore Rooms, and Create Room navigation is available on desktop and mobile, including inside rooms. Explore shows titles, creator nicknames, creation times, participant counts and capacity. Join Room opens the existing room nickname/admission flow; it uses the same multi-streamer interface and starts all devices off.
+
+- Search matches room titles without case sensitivity. Filters are All Rooms, Active (any connected participants, including full rooms), Empty, and Available (not full). Sort by newest, most participants, or least participants.
+- Redis room records are authoritative for existence, visibility, ending, and 12-hour expiry. Discovery scans all `studyflow:room:*` keys with cursor-based `SCAN` and batched `MGET`; it uses no process-local metadata or secondary index. This deliberately favors a small-room MVP over additional infrastructure. For a much larger room directory, add a persistent index and server-side search/pagination together.
+- LiveKit `ListRooms` supplies authoritative participant counts, independently of media tracks. A participant with camera/mic off still counts, and screen sharing does not add another participant. LiveKit maintains unique connection identities during reconnection. A new admission uses a new UUID; multiple tabs count as separate participants, even with the same nickname.
+- Counts refresh 12 seconds after each completed request, with no overlapping polls. Polling stops on unmount. Missing LiveKit rooms count as EMPTY while their Redis records remain valid; joining recreates their media room with the six-person cap. Provider errors show a retry action and label any retained counts as last known instead of inventing zero counts.
+- FULL takes precedence over ACTIVE. Ended, expired, deleted, and invite-only rooms are excluded. Expiry is checked on each request; Redis TTL removes metadata automatically, without an application scheduler. LiveKit empty-room cleanup never ends an application room.
+- Existing Phase 1/2 records lack visibility and remain invite-only. Existing identifiers and invitation URLs are unchanged; they are never silently published. Invite-only rooms use the existing unguessable 128-bit invitation URL as a bearer capability: anyone given that link is authorized to read metadata and join, but cannot end the room. Keep those links private. There is no account-based private-room access system.
+
+### API
+
+- `GET /api/rooms`: returns `{ rooms: [...] }` for all valid PUBLIC records, newest first, with `id`, `title`, `hostName`, `visibility`, `status` (`ACTIVE`, `EMPTY`, `FULL`), `participantCount`, `maxParticipants`, `createdAt`, and `expiresAt`. Timestamps are Unix milliseconds. Host credentials/hashes, provider room details, and LiveKit API credentials are never serialized. Rate limited to 30 requests/minute per trusted client IP.
+- `GET /api/rooms/[roomId]`: returns the same room metadata plus the existing lifecycle `state` and cookie-derived `isHost`. Knowing an invite-only URL authorizes this read. Missing/expired/ended rooms return 404/410. Discovery status is separate from the stored CREATED/LIVE/ENDED lifecycle state.
+- `POST /api/rooms`: accepts `{ nickname, title, visibility?: "PUBLIC" | "PRIVATE" }`. Omitted visibility defaults to PUBLIC; invalid values are rejected. Returns the existing `{ id, url }` and room-scoped creator cookie.
+- `POST /api/rooms/[roomId]/token`: revalidates existence, expiry, provider configuration, and current unique LiveKit participant count before signing. Full rooms return 409 with a clear message. LiveKit remains responsible for atomic connection admission when simultaneous token requests race. No slot is reserved by a token.
+
+All responses are uncached. Existing creator-only start/end authorization and same-origin mutation checks remain in place.
+
 ## Capacity and authorization
 
 Phase 2 deliberately uses the simpler **six connected participants total**, including the creator and people with all devices off. There is no watch-only overflow or publisher-slot queue.
 
-LiveKit enforces `maxParticipants: 6` at connection admission, including concurrent joins. Slots are freed when LiveKit processes a disconnect; unexpected network loss can temporarily retain a slot during reconnection. A seventh connection is rejected by LiveKit. Issuing a JWT does not reserve a slot. Every join verifies that the provider room has the correct cap, and signed tokens include the same room configuration so automatic room recreation also keeps the limit. Existing Phase 1 rooms with a different provider cap are rejected with a message to create a new room.
+LiveKit enforces `maxParticipants: 6` at connection admission, including concurrent joins. Slots are freed when LiveKit processes a disconnect; unexpected network loss can temporarily retain a slot during reconnection. A seventh connection is rejected by LiveKit. Issuing a JWT does not reserve a slot. Every join checks current presence and verifies that the provider room has the correct cap, and signed tokens include the same room configuration so automatic room recreation also keeps the limit. Existing Phase 1 rooms with a different provider cap are rejected with a message to create a new room.
 
 All participants receive `canPublish`, `canSubscribe`, and `canPublishData`, limited to camera, microphone, screen video, and screen audio sources. They cannot administer the LiveKit room or change their metadata. Every join, including the creator's, receives a new server-generated UUID identity; nicknames are display names and can be duplicated. Submitted roles and identities do not grant privileges.
 
@@ -69,14 +89,14 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
-# Browser tests require the five app service variables to be absent:
+# Browser tests run an isolated production server on port 3100 with service variables blank:
 npx playwright install chromium
 npm run test:e2e
 # Or use an existing Chromium:
 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run test:e2e
 ```
 
-Unit/API tests verify signed grants, unique identities, creator-only administration, six-person provider configuration, rejection of legacy uncapped rooms, validation, expiry, rate limits, and ending. External HTTP services are stubbed; these checks do not prove real Redis Lua execution, LiveKit capacity admission, or media transport. Browser checks cover the landing/join flow, mobile layout, missing configuration, and cross-origin rejection.
+Unit/API tests verify signed grants, unique identities, creator-only administration, six-person provider configuration, rejection of legacy uncapped rooms, validation, expiry, rate limits, and ending. Discovery checks cover multiple Redis scan pages, duplicate scan results, missing media rooms, public/private/legacy visibility, full-room preflight, and provider outages. External HTTP services are stubbed; these checks do not prove real Redis Lua execution, LiveKit capacity admission, or media transport. Browser checks cover landing/join flows, search/filter/sort, polling and retry, mobile layouts, missing configuration, and cross-origin rejection. Mock rooms exist only in tests.
 
 ### Real-service acceptance
 
@@ -89,12 +109,14 @@ Use an HTTPS deployment with actual LiveKit Cloud and Upstash credentials:
 5. Join up to six clients. Race additional joins; confirm only six connect. Leave one client and confirm another can join after LiveKit releases the slot. Repeat with abrupt network loss and reconnection. Confirm placeholders and participant tiles update on joins/leaves, with no duplicate camera tiles.
 6. Leave as creator: other participants must remain connected and keep streaming. Rejoin in the same browser to recover End room controls; another profile must not have those controls. POST start/end without the creator cookie or forge role fields: no administrative privileges should be granted.
 7. End the room: everyone must disconnect; fresh joins and old join/reconnection tokens must not recreate the session after cleanup. Retry ending if provider cleanup fails. Verify expiry, mobile layout, and Vercel function duration as well.
+8. Create public and invite-only rooms. Verify only public rooms appear in Explore, including rooms nobody has entered. Leave a public room empty and confirm it remains listed. Rejoin it from Explore after provider cleanup. Confirm counts update within a poll after joins/leaves, including users with devices off and users sharing multiple tracks. Fill six slots and confirm FULL; try joining from a stale card and confirm the admission error. End or expire the room and confirm it disappears. Existing invite-only links should continue working without appearing in Explore.
 
 ## Project layout
 
 - `src/app`: landing/room pages and server-only API route handlers.
+- `src/app/explore` and `src/components/explore-rooms.tsx`: public room discovery, polling, search/filter/sort; `room-card.tsx` and `site-header.tsx` provide reusable cards/navigation.
 - `src/components/studio.tsx`: multi-participant camera grid, screen shares, device controls, and creator-only ending.
 - `src/components/chat.tsx`: existing reliable LiveKit data chat.
 - `src/components/ui`: shadcn/ui component source; theme tokens live in `src/app/globals.css`.
-- `src/lib`: validation, creator-cookie authorization, Redis state/rate limits, and LiveKit configuration/tokens.
+- `src/lib`: validation, creator-cookie authorization, Redis state/rate limits, LiveKit configuration/tokens, and discovery presence/DTOs.
 - `tests`: security/API contracts; `tests/browser`: production browser checks.
