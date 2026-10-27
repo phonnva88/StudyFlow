@@ -1,19 +1,19 @@
 # StudyFlow
 
-A minimal study livestreaming app built with Next.js App Router, TypeScript, Tailwind CSS, LiveKit Cloud, and Upstash Redis. Hosts broadcast camera, microphone, and screen; viewers join by link and chat over reliable LiveKit Data Messages. No accounts, recordings, public discovery, or fake streams.
+StudyFlow gives students and study groups a online room to study together: a host can share a camera, microphone, or screen while invited viewers watch and chat. It is for people who want a little company and focus during a study session.
 
-## Run locally
+## Installation
 
-Use Node.js 22+ and npm. Dependencies are pinned by `package-lock.json`; TypeScript 6 is used because the current Next.js ESLint integration does not support TypeScript 7.
+Use Node.js 22+ and npm.
 
 ```sh
 npm ci
 cp .env.example .env.local
-# Fill in the five variables using your own projects (never commit this file).
+# Fill in the five variables using your own projects.
 npm run dev
 ```
 
-Open the application on port 3000. Browser media APIs need HTTPS or localhost. Missing service configuration produces an explicit setup error; there is no demo backend.
+Open the application on port 3000. Browser media APIs need HTTPS or localhost. Missing service configuration produces an explicit setup error.
 
 ### LiveKit Cloud
 
