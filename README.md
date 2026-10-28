@@ -1,6 +1,6 @@
 # StudyFlow
 
-StudyFlow gives students, study groups, and friends a private online room to study together. Up to six people can independently share their webcam, microphone, and screen, watch each other, and chat without accounts or host approval.
+StudyFlow gives students, study groups, and friends a public or private online room to study together. Up to six people can independently share their webcam, microphone, and screen, watch each other, chat, and listen to shared music without accounts or host approval for streaming.
 
 Built with Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, official LiveKit React components, LiveKit Cloud, and Upstash Redis. Media and chat are not recorded or stored.
 
@@ -29,7 +29,7 @@ Use **LiveKit Cloud**, since ending rooms uses Cloud token revocation. Allow HTT
 
 ## Collaborative study rooms
 
-1. Enter a nickname and room title to create a room, then select **Enter room**.
+1. Enter a nickname and room title, choose Public or Private visibility, then create the room and select **Enter room**.
 2. Copy the invitation link. Other people enter their nicknames and select **Join study room**.
 3. Every participant can toggle their own camera, microphone, and screen share. All devices start **off**; joining does not request camera/microphone permission.
 4. Cameras appear once per participant, with names, microphone status, and placeholders for disabled cameras. Screen shares appear prominently above the camera grid. Multiple screen shares coexist with camera streams.
@@ -98,3 +98,40 @@ Use an HTTPS deployment with actual LiveKit Cloud and Upstash credentials:
 - `src/components/ui`: shadcn/ui component source; theme tokens live in `src/app/globals.css`.
 - `src/lib`: validation, creator-cookie authorization, Redis state/rate limits, and LiveKit configuration/tokens.
 - `tests`: security/API contracts; `tests/browser`: production browser checks.
+
+## Public room discovery (Phase 3)
+
+Open `/explore` from Home or a room to browse public study rooms. Search titles, filter All / Active / Empty / Available, and sort newest / most / least participants. Cards show creator, creation time, LiveKit participant count, six-person capacity, and ACTIVE / EMPTY / FULL status. Full takes precedence; webcam and screen tracks are not counted as extra people. Join Room opens the existing nickname/join flow.
+
+Public visibility is an explicit creation option. Existing rooms and older API clients without visibility remain Private. Private rooms are unlisted and the existing unpredictable invitation URL is a bearer capability: anyone given that link can join; this is not a verified-membership or password system. No private IDs or creator credentials are exposed in the listing API.
+
+`GET /api/rooms` exhausts Redis SCAN, deduplicates keys and batch-loads metadata. Expired, ended, deleted and private rooms are excluded. LiveKit ListRooms provides presence, with metadata rechecked afterward. A valid application room with no media room is EMPTY and stays discoverable. Provider failures return an error rather than invented counts. The browser polls every 12 seconds. Token issuance rechecks room validity and capacity, with LiveKit admission enforcing concurrent joins. No new environment variables, migration, or process-local storage is used. This MVP scans active metadata per request; larger deployments should add a public-room index with server pagination/search.
+
+## Shared room music (Phase 4)
+
+The collapsible Room Music panel sits below chat. Everyone can search the library by title/artist and request songs. The creator starts playback, pauses/resumes, skips, or removes queued requests. The first song waits for the creator to press Play; subsequent songs advance automatically while clients poll. Tracks are FIFO, limited to 20 queued requests, with no duplicate queued/current track and five requests per connected identity per minute.
+
+Music starts disabled for every listener. Select **Enable Room Music** to hear it. Each participant's volume and mute affect only their local music, independently of conversation audio. Use headphones to reduce microphone echo, and do not capture this tab's audio during screen sharing. The app never publishes its music element into LiveKit tracks. Browser autoplay restrictions, buffering and device limitations can still require another explicit enable action.
+
+The included Quiet Orbit and Soft Morning are original 45-second ambient compositions synthesized for this project, without third-party samples. Their CC0 dedication and provenance are in `public/music/LICENSE.md`; regenerate the PCM WAV assets with `node scripts/render-study-music.mjs`. The files are served by the application, with no external music streaming service. To add songs, place authorized files in `public/music`, add validated metadata to `src/lib/music-catalog.ts`, and keep evidence that the license permits public web playback and redistribution. Duration must match the asset. No arbitrary user URLs, uploads, or extraction APIs are accepted. HTTPS sources may be configured by maintainers only after reviewing their rights, availability, and seeking/range support.
+
+Redis Lua transactions maintain one logical music state and queue per room. Redis TIME defines the timeline. Transactions serialize requests and automatic advancement; version-checked creator controls reject stale/repeated commands. Snapshots are fetched every two seconds, with reliable LiveKit data notifications as refresh hints. Clients never trust a data message as authoritative state. New listeners seek to the server timeline, account for approximately half the request latency, ignore older versions/snapshots, and correct drift above one second. This targets roughly 1–2 second agreement on healthy connections, not sample-perfect playback. A stale snapshot or disconnected media session pauses local audio.
+
+There is no background scheduler: after ten seconds without an authorized snapshot, the next request pauses the timeline at the last observed snapshot rather than advancing an unattended playlist. This conservative inactivity rule also applies when every browser is suspended/background-throttled. The creator presses Play to resume after returning. Refresh/reconnect gets the existing Redis state; another participant's departure does not reset it. State expires with the room's TTL and is atomically deleted when the room is ended.
+
+Music credentials are signed, room-bound, expiring session tokens issued with the existing join response. Every music API checks the LiveKit identity is still present; nicknames/roles from requests do not establish identity or creator privileges. Attribution uses the provider's participant name. Global controls additionally require the creator cookie, and writes require same-origin requests. Session credentials stay in browser memory and never become LiveKit administrator credentials. Music keys are separate from discovery metadata and cannot appear in Explore.
+
+APIs: `GET /api/music/tracks`, `GET /api/rooms/[id]/music`, `POST /api/rooms/[id]/music/requests`, `POST /api/rooms/[id]/music/play|pause|skip`, and `DELETE /api/rooms/[id]/music/queue/[requestId]`. Room music calls use `Authorization: Bearer <musicSession>` from the join response; controls send `expectedVersion`. No additional production environment variables are required. The existing five service variables and Vercel configuration remain sufficient.
+
+### Additional verification
+
+`npm test` covers discovery privacy/presence, room-bound music credentials, trusted attribution and creator authorization. An optional test executes the actual Lua against disposable Redis (Docker is for tests only):
+
+```sh
+docker run -d --name studyflow-music-redis-test redis:7-alpine redis-server --save '' --appendonly no
+STUDYFLOW_REDIS_TEST=1 npx tsx --test tests/music.test.ts
+docker stop studyflow-music-redis-test
+docker rm studyflow-music-redis-test
+```
+
+Verify on an HTTPS deployment using real LiveKit/Upstash credentials: public/private discovery including empty/full/ended rooms; search/filter/sort and mobile navigation; two or more participants requesting songs; creator-only controls; autoplay enable, local mute/volume, late-join alignment, pause/resume, skip, automatic next track, duplicate requests, buffering, reconnect and inactivity behavior. Also confirm multiple cameras, screen shares and chat remain functional while music plays. Automated service stubs and local Redis tests do not prove Cloud transport, multi-device audio alignment, or a Vercel deployment.

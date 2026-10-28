@@ -32,12 +32,14 @@ test("room API contracts: credential privacy, shared publishing, unique identiti
   };
   let count = 0;
   let providerCap = 6;
+  let connected = 0;
   let recordExists = true;
   t.mock.method(
     globalThis,
     "fetch",
     async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url).includes("test.livekit.cloud")) {
+        if (String(url).endsWith("/ListParticipants")) return Response.json({ participants: Array.from({length: connected}, (_, i) => ({ identity: `p-${i}`, sid: `PA_${i}` })) });
         assert.ok(String(url).endsWith("/CreateRoom"));
         const config = JSON.parse(String(init?.body));
         assert.equal(config.maxParticipants, 6);
@@ -115,6 +117,11 @@ test("room API contracts: credential privacy, shared publishing, unique identiti
   assert.notEqual((await verifier.verify(viewer.token)).sub, claims.sub);
   assert.deepEqual((await verifier.verify(viewer.token)).video, claims.video);
   assert.equal(claims.roomConfig?.maxParticipants, 6);
+  connected = 6;
+  const full = await token(request("/token", false, { nickname: "Seventh" }), context);
+  assert.equal(full.status, 409);
+  assert.match((await full.json()).error, /full/);
+  connected = 0;
   providerCap = 100;
   assert.equal((await token(request("/token", false, { nickname: "Legacy" }), context)).status, 409);
   providerCap = 6;
@@ -210,7 +217,7 @@ test("creation reserves a provider room and stores only a hashed credential in R
         origin: "http://localhost",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ nickname: "Ada", title: "Study hour" }),
+      body: JSON.stringify({ nickname: "Ada", title: "Study hour", visibility: "PUBLIC" }),
     }),
   );
   assert.equal(response.status, 201);
@@ -220,6 +227,7 @@ test("creation reserves a provider room and stores only a hashed credential in R
   assert.equal(providerName, `studyflow-${result.id}`);
   assert.equal(saved?.id, result.id);
   assert.equal(saved?.state, "CREATED");
+  assert.equal(saved?.visibility, "PUBLIC");
   const cookie = response.cookies.get(hostCookie(result.id))!;
   assert.equal(cookie.httpOnly, true);
   assert.equal(cookie.sameSite, "strict");

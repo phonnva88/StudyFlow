@@ -9,6 +9,7 @@ export interface StudyRoom {
   hostName: string;
   hostHash: string;
   state: RoomState;
+  visibility?: "PUBLIC" | "PRIVATE";
   createdAt: number;
   expiresAt: number;
 }
@@ -45,10 +46,11 @@ export async function transition(id: string, next: "LIVE" | "ENDED") {
     local room = cjson.decode(raw)
     if room.state == 'ENDED' and ARGV[1] ~= 'ENDED' then return -1 end
     room.state = ARGV[1]
+    if ARGV[1] == 'ENDED' then redis.call('DEL', KEYS[2]) end
     redis.call('SET', KEYS[1], cjson.encode(room), 'KEEPTTL')
     return 1
   `,
-    [key(id)],
+    [key(id), `studyflow:music:${id}`],
     [next],
   );
   if (result === 0) throw new HttpError(404, "Room not found.");
@@ -76,4 +78,28 @@ export const publicRoom = (room: StudyRoom) => ({
   hostName: room.hostName,
   state: room.state,
   expiresAt: room.expiresAt,
+  createdAt: room.createdAt,
+  visibility: room.visibility ?? "PRIVATE",
 });
+
+// SCAN works across existing metadata without a migration or a second index.
+// Deduplicate keys: Redis SCAN may return a key more than once.
+export async function listPublicRecords(): Promise<StudyRoom[]> {
+  const client = redis();
+  let cursor = "0";
+  const keys = new Set<string>();
+  do {
+    const page = await client.scan(cursor, { match: "studyflow:room:*", count: 100 });
+    cursor = String(page[0]);
+    for (const value of page[1]) keys.add(value);
+  } while (cursor !== "0");
+  const rooms: StudyRoom[] = [];
+  const allKeys = [...keys];
+  for (let i = 0; i < allKeys.length; i += 100) {
+    const records = await client.mget<(StudyRoom | null)[]>(...allKeys.slice(i, i + 100));
+    rooms.push(...records.filter((room): room is StudyRoom => !!room &&
+      /^[a-f0-9]{32}$/.test(room.id) && room.visibility === "PUBLIC" &&
+      room.state !== "ENDED" && room.expiresAt > Date.now()));
+  }
+  return rooms;
+}

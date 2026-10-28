@@ -30,3 +30,10 @@ export function chatText(value: unknown): string | null {
   const message = value.trim();
   return message && message.length <= 500 ? message : null;
 }
+
+export function visibility(value: unknown): "PUBLIC" | "PRIVATE" {
+  if (value === undefined) return "PRIVATE"; // Older clients remain unlisted.
+  if (value !== "PUBLIC" && value !== "PRIVATE")
+    throw new HttpError(400, "Choose Public or Private room visibility.");
+  return value;
+}

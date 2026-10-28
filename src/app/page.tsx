@@ -3,9 +3,10 @@
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowRight, ArrowUpRight, Check, Headphones, LoaderCircle,
+  ArrowRight, Check, Headphones, LoaderCircle,
   MessageCircle, MonitorUp, Radio, ShieldCheck, Video,
 } from 'lucide-react';
+import { Navigation } from '@/components/navigation';
 import { Brand } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,7 +28,7 @@ export default function Home() {
       const response = await fetch('/api/rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: data.get('nickname'), title: data.get('title') }),
+        body: JSON.stringify({ nickname: data.get('nickname'), title: data.get('title'), visibility: data.get('visibility') }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
@@ -38,19 +39,11 @@ export default function Home() {
     }
   }
 
-  function focusForm() {
-    form.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    form.current?.querySelector('input')?.focus({ preventScroll: true });
-  }
-
   return (
     <div className="min-h-screen overflow-hidden">
-      <header className="mx-auto flex h-20 max-w-7xl items-center justify-between border-b border-border/70 px-6 lg:h-24 lg:px-12">
+      <header className="mx-auto flex min-h-20 max-w-7xl flex-wrap items-center justify-between gap-3 py-4 border-b border-border/70 px-6 lg:h-24 lg:px-12">
         <Brand />
-        <nav className="flex items-center gap-5 sm:gap-8">
-          <a href="#how-it-works" className="hidden text-sm text-muted-foreground transition-colors hover:text-foreground sm:inline">How it works</a>
-          <Button variant="outline" size="sm" onClick={focusForm}>Create a room <ArrowUpRight className="size-4" /></Button>
-        </nav>
+        <Navigation />
       </header>
 
       <main>
@@ -88,10 +81,10 @@ export default function Home() {
               </div>
             </CardHeader>
             <CardContent>
-              <form ref={form} className="mt-5 space-y-5" onSubmit={create}>
+              <form id="create-room" ref={form} className="mt-5 space-y-5" onSubmit={create}>
                 <div className="space-y-2"><Label htmlFor="nickname">Your nickname</Label><Input id="nickname" name="nickname" placeholder="What should we call you?" autoComplete="nickname" required maxLength={32} disabled={busy} /></div>
                 <div className="space-y-2"><Label htmlFor="title">Room title</Label><Input id="title" name="title" placeholder="e.g. Late-night library hours" required maxLength={80} disabled={busy} /></div>
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground"><span className="size-1.5 rounded-full bg-primary" />Your room is invite-only. You choose the company.</div>
+                <div className="space-y-2"><Label htmlFor="visibility">Who can find your room?</Label><select id="visibility" name="visibility" defaultValue="PUBLIC" disabled={busy} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="PUBLIC">Public — listed on Explore</option><option value="PRIVATE">Private — invitation link only</option></select><p className="text-xs text-muted-foreground">Anyone can join public rooms. For private rooms, share the invitation link only with your group.</p></div>
                 {error && <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-red-200" role="alert">{error}</p>}
                 <Button className="w-full justify-between" disabled={busy}>
                   {busy ? <><LoaderCircle className="size-4 animate-spin" />Creating your room…</> : <>Create Room <ArrowRight className="size-4" /></>}
