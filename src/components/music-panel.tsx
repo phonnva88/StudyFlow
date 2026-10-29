@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConnectionState, useRoomContext } from '@livekit/components-react';
 import { ConnectionState, RoomEvent } from 'livekit-client';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
 import { Label } from './ui/label';
 import type { MusicState, MusicTrack } from '@/lib/music-types';
 import { musicPosition } from '@/lib/music-timeline';
@@ -30,7 +29,6 @@ export function MusicPanel({ id, session, isHost }: { id: string; session: strin
   const [volume, setVolume] = useState(0.3);
   const [muted, setMuted] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [spotify, setSpotify] = useState<string | null>(null);
 
@@ -64,8 +62,9 @@ export function MusicPanel({ id, session, isHost }: { id: string; session: strin
   }, [connection, load, room]);
   useEffect(() => {
     const controller = new AbortController();
+    // Older room queues can still contain built-in tracks without embedded metadata.
     fetch('/api/music/tracks', {signal: controller.signal}).then(async response => {
-      if (!response.ok) throw new Error('Music library is unavailable.');
+      if (!response.ok) throw new Error('Saved music metadata is unavailable.');
       const data = await response.json(); setTracks(data.tracks);
     }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
@@ -144,8 +143,6 @@ export function MusicPanel({ id, session, isHost }: { id: string; session: strin
       })}</ol>}
       <MusicSourceBrowser id={id} session={session} connected={connection === ConnectionState.Connected} busy={busy} unavailableYouTubeIds={[...(state?.current ? [state.current.trackId] : []), ...(state?.queue.map(item => item.trackId) || [])]} onYouTubeRequest={url => void action('requests', 'POST', {url})} onSpotifyOpen={setSpotify} />
       {spotify && <div className="space-y-2"><iframe title="Spotify personal player" src={spotify} width="100%" height="352" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy" className="rounded-md border-0" /><Button size="sm" variant="ghost" onClick={() => setSpotify(null)}>Close Spotify player</Button></div>}
-      <Label htmlFor={`music-search-${id}`}>Music library</Label><Input id={`music-search-${id}`} placeholder="Search title or artist…" value={query} onChange={event => setQuery(event.target.value)} />
-      <div className="max-h-64 space-y-3 overflow-auto">{tracks.filter(t => `${t.title} ${t.artist}`.toLowerCase().includes(query.toLowerCase())).map(song => <div key={song.id} className="space-y-2 rounded-md border border-border p-3"><p className="text-sm">{song.title} — {song.artist}</p><p className="text-xs text-muted-foreground">{clock(song.durationSeconds)} · {song.licenseInfo}</p><Button size="sm" variant="outline" disabled={busy || connection !== ConnectionState.Connected || state?.current?.trackId === song.id || state?.queue.some(item => item.trackId === song.id)} onClick={() => void action('requests', 'POST', {trackId: song.id})}>Request Song</Button></div>)}{!tracks.length && <p className="text-xs text-muted-foreground">No authorized tracks are available.</p>}</div>
     </div>
   </details>;
 }
