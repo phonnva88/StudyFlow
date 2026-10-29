@@ -69,10 +69,11 @@ export async function transition(id: string, next: "LIVE" | "ENDED") {
     local room = cjson.decode(raw)
     if room.state == 'ENDED' and ARGV[1] ~= 'ENDED' then return -1 end
     room.state = ARGV[1]
+    if ARGV[1] == 'ENDED' then redis.call('DEL', KEYS[2]) end
     redis.call('SET', KEYS[1], cjson.encode(room), 'KEEPTTL')
     return 1
   `,
-    [key(id)],
+    [key(id), `studyflow:music:${id}`],
     [next],
   );
   if (result === 0) throw new HttpError(404, "Room not found.");

@@ -65,7 +65,7 @@ export function RoomClient({ id }: { id: string }) {
   const [error, setError] = useState('');
   const [loadError, setLoadError] = useState('');
   const [nickname, setNickname] = useState('');
-  const [session, setSession] = useState<{ token: string; serverUrl: string; isHost: boolean } | null>(null);
+  const [session, setSession] = useState<{ token: string; serverUrl: string; isHost: boolean; musicSession: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [ended, setEnded] = useState(false);
 
@@ -155,7 +155,7 @@ export function RoomClient({ id }: { id: string }) {
             <LiveKitRoom token={session.token} serverUrl={session.serverUrl} connect audio={false} video={false}
               onError={() => { setSession(null); setError('Unable to connect. Rooms allow up to 6 participants. Check your connection; if the room is full, wait for someone to leave and try again.'); }}
               onDisconnected={() => { setSession(null); setError(current => current || 'You disconnected. You can rejoin while the room is active.'); }}>
-              <Studio info={{ ...info, isHost: session.isHost }} onLeave={() => { setSession(null); setError('You left the room. You can rejoin while it is open.'); }} onEnded={() => { setEnded(true); setSession(null); }} />
+              <Studio info={{ ...info, isHost: session.isHost }} musicSession={session.musicSession} onLeave={() => { setSession(null); setError('You left the room. You can rejoin while it is open.'); }} onEnded={() => { setEnded(true); setSession(null); }} />
               {(error || loadError) && <div className="mx-auto my-4 max-w-7xl px-5 text-sm text-destructive" role="alert">{error || loadError}</div>}
             </LiveKitRoom>
           )}
