@@ -10,7 +10,6 @@ import { HttpError, text } from "@/lib/validation";
 import { createRecord, listPublicRecords, ROOM_TTL } from "@/lib/room-store";
 import { discoverRooms } from "@/lib/room-discovery";
 import { ensureStudyRoom, livekitRoom, roomService } from "@/lib/livekit";
-import { discoverRooms } from "@/lib/discovery";
 export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   try {
