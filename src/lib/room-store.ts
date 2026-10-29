@@ -103,28 +103,4 @@ export const publicRoom = (room: StudyRoom) => ({
   visibility: room.visibility ?? "PRIVATE",
   createdAt: room.createdAt,
   expiresAt: room.expiresAt,
-  createdAt: room.createdAt,
-  visibility: room.visibility ?? "PRIVATE",
 });
-
-// SCAN works across existing metadata without a migration or a second index.
-// Deduplicate keys: Redis SCAN may return a key more than once.
-export async function listPublicRecords(): Promise<StudyRoom[]> {
-  const client = redis();
-  let cursor = "0";
-  const keys = new Set<string>();
-  do {
-    const page = await client.scan(cursor, { match: "studyflow:room:*", count: 100 });
-    cursor = String(page[0]);
-    for (const value of page[1]) keys.add(value);
-  } while (cursor !== "0");
-  const rooms: StudyRoom[] = [];
-  const allKeys = [...keys];
-  for (let i = 0; i < allKeys.length; i += 100) {
-    const records = await client.mget<(StudyRoom | null)[]>(...allKeys.slice(i, i + 100));
-    rooms.push(...records.filter((room): room is StudyRoom => !!room &&
-      /^[a-f0-9]{32}$/.test(room.id) && room.visibility === "PUBLIC" &&
-      room.state !== "ENDED" && room.expiresAt > Date.now()));
-  }
-  return rooms;
-}
