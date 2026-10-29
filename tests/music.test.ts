@@ -9,11 +9,27 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { musicPosition } from '../src/lib/music-timeline';
 import type { MusicState } from '../src/lib/music-types';
+import { youtubeId, spotifyEmbed } from '../src/lib/external-music';
+import { requestedTrack } from '../src/lib/music-store';
 
 function setup() {
   Object.assign(process.env, { LIVEKIT_URL: 'wss://test.livekit.cloud', LIVEKIT_API_KEY: 'test-key', LIVEKIT_API_SECRET: 'test-secret-with-at-least-32-characters', UPSTASH_REDIS_REST_URL: 'https://test.upstash.io', UPSTASH_REDIS_REST_TOKEN: 'test-only' });
 }
 const id = 'a'.repeat(32), identity = 'participant-11111111-1111-4111-8111-111111111111';
+test('external providers accept only canonical HTTPS provider IDs and never arbitrary audio', () => {
+  const video = 'aB1_cD2-eF3';
+  assert.equal(youtubeId(`https://youtu.be/${video}?t=10`), video);
+  assert.equal(youtubeId(`https://www.youtube.com/watch?v=${video}`), video);
+  assert.equal(youtubeId(`https://music.youtube.com/watch?v=${video}`), video);
+  for (const value of ['javascript:alert(1)', `https://youtube.com.evil.test/watch?v=${video}`, `https://user@youtube.com/watch?v=${video}`, 'https://youtu.be/invalid', 'http://youtube.com/watch?v=aB1_cD2-eF3']) assert.equal(youtubeId(value), null);
+  assert.equal(spotifyEmbed('https://open.spotify.com/track/1234567890123456789012?si=abc'), 'https://open.spotify.com/embed/track/1234567890123456789012');
+  assert.equal(spotifyEmbed('https://evil.test/track/1234567890123456789012'), null);
+  const item = requestedTrack(undefined, 'Ada', `https://youtu.be/${video}`);
+  assert.equal(item.track?.provider, 'youtube');
+  assert.equal(item.requestedBy, 'Ada');
+  assert.equal(item.durationSeconds, 0); // Never invent a video duration.
+  assert.throws(() => requestedTrack(undefined, 'Ada', 'https://example.com/audio.mp3'));
+});
 test('late listeners calculate the shared position, include latency and freeze when paused', () => {
   const state: MusicState = {current: {id: 'a', trackId: 'a', requestedBy: 'Ada', requestedAt: 0, durationSeconds: 45}, queue: [], status: 'PLAYING', startedAt: 100000, serverNow: 110000, positionSeconds: 5, version: 1};
   assert.equal(musicPosition(state, 200), 15.2);

@@ -8,6 +8,8 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import type { MusicState, MusicTrack } from '@/lib/music-types';
 import { musicPosition } from '@/lib/music-timeline';
+import { YouTubePlayer } from './youtube-player';
+import { MusicSourceBrowser, SongArtwork } from './music-source-browser';
 
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 
@@ -18,6 +20,8 @@ export function MusicPanel({ id, session, isHost }: { id: string; session: strin
   const snapshot = useRef<{state: MusicState; receivedAt: number} | null>(null);
   const pending = useRef(false);
   const lastHint = useRef(0);
+  const enabledRef = useRef(false);
+  const playPending = useRef(false);
   const [state, setState] = useState<MusicState | null>(null);
   const [tracks, setTracks] = useState<MusicTrack[]>([]);
   const [error, setError] = useState('');
@@ -28,6 +32,7 @@ export function MusicPanel({ id, session, isHost }: { id: string; session: strin
   const [progress, setProgress] = useState(0);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
+  const [spotify, setSpotify] = useState<string | null>(null);
 
   const accept = useCallback((value: MusicState, receivedAt: number) => {
     const previous = snapshot.current?.state;
@@ -66,17 +71,30 @@ export function MusicPanel({ id, session, isHost }: { id: string; session: strin
     return () => controller.abort();
   }, []);
 
-  const track = tracks.find(track => track.id === state?.current?.trackId);
+  const track = state?.current?.track || tracks.find(track => track.id === state?.current?.trackId);
+  const playLocal = useCallback(() => {
+    const player = audio.current;
+    if (!player || playPending.current) return;
+    playPending.current = true;
+    void player.play().catch((e: unknown) => {
+      // Switching sources or pausing legitimately cancels an in-flight play().
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      enabledRef.current = false;
+      setEnabled(false);
+      setAudioError('Your browser blocked audio. Click Enable Room Music to allow sound.');
+    }).finally(() => { playPending.current = false; });
+  }, []);
   const sync = useCallback(() => {
     const current = snapshot.current, player = audio.current;
     if (!current || !player) return;
     const s = current.state;
     const position = musicPosition(s, performance.now() - current.receivedAt);
     setProgress(position);
-    if (!enabled || s.status !== 'PLAYING' || !s.current || connection !== ConnectionState.Connected || performance.now() - current.receivedAt > 10000) { player.pause(); return; }
+    if (s.current?.track?.provider === 'youtube') { player.pause(); return; }
+    if (!enabledRef.current || s.status !== 'PLAYING' || !s.current || connection !== ConnectionState.Connected || performance.now() - current.receivedAt > 10000) { player.pause(); return; }
     if (player.readyState > 0 && Math.abs(player.currentTime - position) > 1) player.currentTime = position;
-    if (player.paused && !player.ended) void player.play().catch(() => { setEnabled(false); setAudioError('Playback was blocked. Click Enable Room Music to try again.'); });
-  }, [enabled, connection]);
+    if (player.paused && !player.ended && player.readyState > 0) playLocal();
+  }, [connection, playLocal]);
   useEffect(() => { const tick = setInterval(sync, 500); return () => clearInterval(tick); }, [sync]);
   useEffect(() => {
     const player = audio.current;
@@ -98,24 +116,34 @@ export function MusicPanel({ id, session, isHost }: { id: string; session: strin
   return <details className="rounded-xl border border-border bg-card p-4" open>
     <summary className="cursor-pointer text-sm font-medium">Room Music</summary>
     <div className="mt-4 space-y-4">
-      <audio key={state?.current?.id || 'idle'} ref={audio} src={track?.audioUrl} preload="metadata" onLoadedMetadata={() => { if (audio.current) { audio.current.volume = volume; audio.current.muted = muted; } sync(); }} onEnded={() => void load()} onError={() => setAudioError('This audio could not be loaded. Check your connection or ask the creator to skip it.')} />
-      <div><p className="text-sm font-medium">{track ? `${track.title} — ${track.artist}` : 'No song playing'}</p><p className="mt-1 text-xs text-muted-foreground">{state?.status || 'Loading music…'}</p></div>
-      <progress aria-label="Music progress" className="h-2 w-full accent-primary" max={track?.durationSeconds || 1} value={progress} />
-      <p className="text-xs text-muted-foreground">{clock(progress)} / {clock(track?.durationSeconds || 0)}</p>
+      <audio key={state?.current?.id || 'idle'} ref={audio} src={track?.provider === 'youtube' ? undefined : track?.audioUrl} preload="metadata" onLoadedMetadata={() => { setAudioError(''); if (audio.current) { audio.current.volume = volume; audio.current.muted = muted; } sync(); }} onEnded={() => void load()} onError={() => { if (audio.current?.getAttribute('src')) setAudioError('This audio could not be loaded. Check your connection or ask the creator to skip it.'); }} />
+      {track?.provider === 'youtube' && track.externalId && enabled && <YouTubePlayer videoId={track.externalId} playing={state?.status === 'PLAYING' && connection === ConnectionState.Connected} volume={volume} muted={muted} getPosition={() => snapshot.current && performance.now() - snapshot.current.receivedAt < 10000 ? musicPosition(snapshot.current.state, performance.now() - snapshot.current.receivedAt) : null} onEnded={() => { if (isHost && snapshot.current?.state.status === 'PLAYING') void action('skip'); }} />}
+      <div className="flex items-center gap-3">{track?.thumbnail && <SongArtwork src={track.thumbnail} />}<div><p className="text-sm font-medium">{track ? `${track.title} — ${track.artist}` : 'No song playing'}</p><p className="mt-1 text-xs text-muted-foreground">{state?.status || 'Loading music…'}</p></div></div>
+      {track?.provider !== 'youtube' && <progress aria-label="Music progress" className="h-2 w-full accent-primary" max={track?.durationSeconds || 1} value={progress} />}
+      <p className="text-xs text-muted-foreground">{clock(progress)}{track?.provider !== 'youtube' && ` / ${clock(track?.durationSeconds || 0)}`}</p>
       <Button size="sm" variant="outline" onClick={() => {
-        setAudioError(''); setEnabled(!enabled);
+        setAudioError(''); enabledRef.current = !enabled; setEnabled(!enabled);
         if (enabled) audio.current?.pause();
-        else if (state?.status === 'PLAYING') void audio.current?.play().catch(() => { setEnabled(false); setAudioError('Click Enable Room Music again to allow audio.'); });
+        else if (state?.status === 'PLAYING') {
+          if (audio.current) { audio.current.muted = false; audio.current.volume = volume || 0.3; }
+          setMuted(false);
+          if (!volume) setVolume(0.3);
+          if (track?.provider !== 'youtube') playLocal();
+        }
       }}>{enabled ? 'Disable Room Music' : 'Enable Room Music'}</Button>
+      {!enabled && state?.status === 'PLAYING' && <p role="status" className="text-sm text-primary">The room is playing music. Your sound is off — click Enable Room Music to listen.</p>}
+      {enabled && (muted || volume === 0) && <p role="status" className="text-xs text-muted-foreground">Your music is muted. Unmute it or raise Your volume to hear sound.</p>}
       <div className="flex items-center gap-3"><Label htmlFor={`music-volume-${id}`}>Your volume</Label><input id={`music-volume-${id}`} aria-label="Music volume" type="range" min="0" max="1" step="0.05" value={volume} onChange={event => setVolume(Number(event.target.value))} className="min-w-0 flex-1 accent-primary" /><Button size="sm" variant="ghost" aria-pressed={muted} onClick={() => setMuted(!muted)}>{muted ? 'Unmute music' : 'Mute music'}</Button></div>
       <p className="text-xs leading-5 text-muted-foreground">Use headphones to avoid echo with your microphone. Music volume affects only you. Exclude this tab’s audio when screen sharing.</p>
       {isHost && <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || !state || (!state.current && !state.queue.length)} onClick={() => void action(state?.status === 'PLAYING' ? 'pause' : 'play')}>{state?.status === 'PLAYING' ? 'Pause for everyone' : 'Play for everyone'}</Button><Button size="sm" variant="outline" disabled={busy || !state?.current} onClick={() => void action('skip')}>Skip</Button></div>}
       {(error || audioError) && <p role="alert" className="text-xs text-destructive">{error || audioError}</p>}
       <h3 className="text-sm font-medium">Shared queue ({state?.queue.length || 0}/20)</h3>
       {!state?.queue.length ? <p className="text-xs text-muted-foreground">The queue is empty. Request a song below; the creator starts playback.</p> : <ol className="max-h-48 space-y-3 overflow-auto">{state.queue.map((item, i) => {
-        const song = tracks.find(track => track.id === item.trackId);
-        return <li key={item.id} className="flex items-center justify-between gap-2 text-xs"><span className="min-w-0 break-words">{i + 1}. {song?.title || item.trackId} — {song?.artist}<br /><span className="text-muted-foreground">Requested by {item.requestedBy} · {clock(item.durationSeconds)}</span></span>{isHost && <Button variant="ghost" size="sm" disabled={busy} aria-label={`Remove ${song?.title || item.trackId}`} onClick={() => void action(`queue/${item.id}`, 'DELETE')}>Remove</Button>}</li>;
+        const song = item.track || tracks.find(track => track.id === item.trackId);
+        return <li key={item.id} className="flex items-center justify-between gap-2 text-xs">{song?.thumbnail && <SongArtwork src={song.thumbnail} />}<span className="min-w-0 flex-1 break-words">{i + 1}. {song?.title || item.trackId} — {song?.artist}<br /><span className="text-muted-foreground">Requested by {item.requestedBy} · {song?.provider === 'youtube' ? 'YouTube' : clock(item.durationSeconds)}</span></span>{isHost && <Button variant="ghost" size="sm" disabled={busy} aria-label={`Remove ${song?.title || item.trackId}`} onClick={() => void action(`queue/${item.id}`, 'DELETE')}>Remove</Button>}</li>;
       })}</ol>}
+      <MusicSourceBrowser id={id} session={session} connected={connection === ConnectionState.Connected} busy={busy} unavailableYouTubeIds={[...(state?.current ? [state.current.trackId] : []), ...(state?.queue.map(item => item.trackId) || [])]} onYouTubeRequest={url => void action('requests', 'POST', {url})} onSpotifyOpen={setSpotify} />
+      {spotify && <div className="space-y-2"><iframe title="Spotify personal player" src={spotify} width="100%" height="352" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy" className="rounded-md border-0" /><Button size="sm" variant="ghost" onClick={() => setSpotify(null)}>Close Spotify player</Button></div>}
       <Label htmlFor={`music-search-${id}`}>Music library</Label><Input id={`music-search-${id}`} placeholder="Search title or artist…" value={query} onChange={event => setQuery(event.target.value)} />
       <div className="max-h-64 space-y-3 overflow-auto">{tracks.filter(t => `${t.title} ${t.artist}`.toLowerCase().includes(query.toLowerCase())).map(song => <div key={song.id} className="space-y-2 rounded-md border border-border p-3"><p className="text-sm">{song.title} — {song.artist}</p><p className="text-xs text-muted-foreground">{clock(song.durationSeconds)} · {song.licenseInfo}</p><Button size="sm" variant="outline" disabled={busy || connection !== ConnectionState.Connected || state?.current?.trackId === song.id || state?.queue.some(item => item.trackId === song.id)} onClick={() => void action('requests', 'POST', {trackId: song.id})}>Request Song</Button></div>)}{!tracks.length && <p className="text-xs text-muted-foreground">No authorized tracks are available.</p>}</div>
     </div>

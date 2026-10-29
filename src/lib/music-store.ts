@@ -4,6 +4,7 @@ import { configuration } from './config';
 import { HttpError } from './validation';
 import { musicTracks } from './music-catalog';
 import type { MusicState } from './music-types';
+import { youtubeId } from './external-music';
 
 // One Lua transaction serializes queue mutations, playback and lazy advancement.
 // Redis TIME is authoritative. Inactivity pauses rather than draining a playlist.
@@ -35,7 +36,7 @@ if s.status == 'PLAYING' then
   local effective = now
   if now-s.lastSeen > 10000 then effective=s.lastSeen end
   while s.current ~= cjson.null and s.status == 'PLAYING' and
-    s.positionSeconds+(effective-s.startedAt)/1000 >= s.current.durationSeconds do
+    s.current.durationSeconds > 0 and s.positionSeconds+(effective-s.startedAt)/1000 >= s.current.durationSeconds do
     local finish=s.startedAt+(s.current.durationSeconds-s.positionSeconds)*1000
     advance(finish)
   end
@@ -77,7 +78,13 @@ export async function updateMusic(id: string, op: string, data: Record<string, u
   if (!Array.isArray(state.queue)) state.queue = [];
   return state;
 }
-export function requestedTrack(trackId: unknown, requestedBy: string) {
+export function requestedTrack(trackId: unknown, requestedBy: string, url?: unknown) {
+  if (url !== undefined) {
+    const videoId = typeof url === 'string' && url.length <= 2048 ? youtubeId(url) : null;
+    if (!videoId) throw new HttpError(400, 'Use a valid HTTPS YouTube video link.');
+    const track = {id: `youtube:${videoId}`, provider: 'youtube' as const, externalId: videoId, title: `YouTube · ${videoId}`, artist: 'YouTube', durationSeconds: 0, audioUrl: `https://www.youtube.com/watch?v=${videoId}`, licenseInfo: 'Playback through the official YouTube player, subject to the video owner’s embedding and regional restrictions.'};
+    return {id: randomUUID(), trackId: track.id, durationSeconds: 0, requestedBy, requestedAt: Date.now(), track};
+  }
   const track = musicTracks.find(track => track.id === trackId);
   if (!track) throw new HttpError(400, 'Choose a song from the authorized music catalog.');
   return { id: randomUUID(), trackId: track.id, durationSeconds: track.durationSeconds, requestedBy, requestedAt: Date.now() };
