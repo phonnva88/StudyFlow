@@ -1,7 +1,7 @@
 import { Redis } from '@upstash/redis';
 import { configuration } from './config';
 import { HttpError } from './validation';
-import { ROOM_SPACE_BOUNDS, ROOM_SPACE_OBSTACLES, ROOM_SPACE_SEATS, ROOM_SPACE_PUNCH_REACH, ROOM_SPACE_SPEED, type RoomSpaceSnapshot } from './room-space';
+import { ROOM_SPACE_BOUNDS, ROOM_SPACE_OBSTACLES, ROOM_SPACE_SEATS, ROOM_SPACE_PUNCH_REACH, ROOM_SPACE_SPEED, ROOM_SPACE_COLLISION_EPSILON, type RoomSpaceSnapshot } from './room-space';
 
 const layout = JSON.stringify({bounds: ROOM_SPACE_BOUNDS, obstacles: ROOM_SPACE_OBSTACLES, seats: ROOM_SPACE_SEATS});
 // One room-scoped transaction validates movement, seat ownership and hit distance.
@@ -17,6 +17,10 @@ if room.state=='ENDED' or room.expiresAt<=now then redis.call('DEL',KEYS[2]); re
 local saved=redis.call('GET',KEYS[2])
 local state=saved and cjson.decode(saved) or {players={},ejected={},restore={},version=0}
 if not state.restore then state.restore={} end
+-- Keep standing seats numeric without depending on a provider's cjson.null.
+-- Migrate old null/omitted seats before any occupancy or interaction checks.
+for _,p in pairs(state.players) do if type(p.seat)~='number' then p.seat=-1 end end
+for _,p in pairs(state.restore) do if type(p.seat)~='number' then p.seat=-1 end end
 local op=ARGV[1]
 local input=cjson.decode(ARGV[2])
 local connected=cjson.decode(ARGV[3])
@@ -35,20 +39,20 @@ if op=='rollback' then
   if state.ejected[input.target] and state.ejected[input.target]==input.reservation then
     local previous=state.restore[input.target]
     local free=true
-    if previous then for _,p in pairs(state.players) do if p.seat~=cjson.null and p.seat==previous.seat then free=false end end end
+    if previous and previous.seat>=0 then for _,p in pairs(state.players) do if p.seat==previous.seat then free=false end end end
     if previous and free and present[input.target] then state.players[input.target]=previous end
     state.ejected[input.target]=nil; state.restore[input.target]=nil; state.version=state.version+1
   end
 end
 if state.ejected[identity] then return err(403,'You were knocked out of this study room. Rejoin to take another seat.') end
 local occupied={}
-for _,p in pairs(state.players) do if p.seat~=cjson.null then occupied[p.seat]=true end end
+for _,p in pairs(state.players) do if p.seat>=0 then occupied[p.seat]=true end end
 for _,member in ipairs(connected) do
   if not state.players[member.identity] and not state.ejected[member.identity] then
     local index=nil
     for i,_ in ipairs(geometry.seats) do if not occupied[i-1] then index=i-1; break end end
     local spawn=index and geometry.seats[index+1] or {x=0,z=4,yaw=0}
-    state.players[member.identity]={identity=member.identity,name=member.name,x=spawn.x,z=spawn.z,yaw=spawn.yaw,seat=index or cjson.null,updatedAt=now,lastMove=now,lastPunch=0}
+    state.players[member.identity]={identity=member.identity,name=member.name,x=spawn.x,z=spawn.z,yaw=spawn.yaw,seat=index or -1,updatedAt=now,lastMove=now,lastPunch=0}
     if index then occupied[index]=true end
     state.version=state.version+1
   end
@@ -56,15 +60,15 @@ end
 local actor=state.players[identity]
 actor.name=present[identity]
 local function standable(x,z)
-  local r=0.28; local b=geometry.bounds
-  if x<b.minX+r or x>b.maxX-r or z<b.minZ+r or z>b.maxZ-r then return false end
-  for _,o in ipairs(geometry.obstacles) do if math.abs(x-o.x)<o.width/2+r and math.abs(z-o.z)<o.depth/2+r then return false end end
+  local r=0.28; local b=geometry.bounds; local epsilon=${ROOM_SPACE_COLLISION_EPSILON}
+  if x<b.minX+r-epsilon or x>b.maxX-r+epsilon or z<b.minZ+r-epsilon or z>b.maxZ-r+epsilon then return false end
+  for _,o in ipairs(geometry.obstacles) do if math.abs(x-o.x)<o.width/2+r-epsilon and math.abs(z-o.z)<o.depth/2+r-epsilon then return false end end
   return true
 end
 local removed=nil
 local reservation=nil
 if op=='move' then
-  if actor.seat~=cjson.null then return err(409,'Stand up before walking.') end
+  if actor.seat>=0 then return err(409,'Stand up before walking.') end
   if now-actor.lastMove<160 then return err(429,'Movement updates are too frequent.') end
   if not standable(input.x,input.z) then return err(400,'You cannot walk through walls or furniture.') end
   local distance=math.sqrt((input.x-actor.x)^2+(input.z-actor.z)^2)
@@ -74,12 +78,12 @@ if op=='move' then
   for i=1,steps do if not standable(actor.x+(input.x-actor.x)*i/steps,actor.z+(input.z-actor.z)*i/steps) then return err(400,'You cannot walk through furniture.') end end
   actor.x=input.x; actor.z=input.z; actor.yaw=input.yaw; actor.updatedAt=now; actor.lastMove=now; state.version=state.version+1
 elseif op=='stand' then
-  if actor.seat~=cjson.null then
+  if actor.seat>=0 then
     local seat=geometry.seats[actor.seat+1]
-    actor.x=seat.x; actor.z=seat.z+0.85; actor.seat=cjson.null; actor.updatedAt=now; actor.lastMove=now; state.version=state.version+1
+    actor.x=seat.x; actor.z=seat.z+0.85; actor.seat=-1; actor.updatedAt=now; actor.lastMove=now; state.version=state.version+1
   end
 elseif op=='sit' then
-  if actor.seat~=cjson.null then return err(409,'Stand up before choosing another chair.') end
+  if actor.seat>=0 then return err(409,'Stand up before choosing another chair.') end
   local seat=geometry.seats[input.seat+1]
   if not seat then return err(400,'Choose an available chair.') end
   for _,p in pairs(state.players) do if p.seat==input.seat then return err(409,'That chair is occupied.') end end
@@ -87,10 +91,10 @@ elseif op=='sit' then
   actor.x=seat.x; actor.z=seat.z; actor.yaw=seat.yaw; actor.seat=input.seat; actor.updatedAt=now; actor.lastMove=now; state.version=state.version+1
 elseif op=='punch' then
   if input.target==identity then return err(400,'You cannot punch yourself.') end
-  if actor.seat~=cjson.null then return err(409,'Stand up and approach an occupied chair first.') end
+  if actor.seat>=0 then return err(409,'Stand up and approach an occupied chair first.') end
   local target=state.players[input.target]
   if not target or not present[input.target] then return err(404,'That participant has left.') end
-  if target.seat==cjson.null then return err(409,'Only someone sitting in a chair can be knocked out.') end
+  if target.seat<0 then return err(409,'Only someone sitting in a chair can be knocked out.') end
   if (actor.x-target.x)^2+(actor.z-target.z)^2>${ROOM_SPACE_PUNCH_REACH * ROOM_SPACE_PUNCH_REACH} then return err(409,'Move closer to the occupied chair first.') end
   if now-actor.lastPunch<3000 then return err(429,'Wait three seconds between punches.') end
   actor.lastPunch=now
@@ -114,5 +118,8 @@ export async function updateRoomSpace(id: string, identity: string, connected: C
   const result = (typeof raw === 'string' ? JSON.parse(raw) : raw) as RoomSpaceSnapshot & {code?: number; error?: string; reservation?: number};
   if (result.error) throw new HttpError(result.code || 409, result.error);
   if (!Array.isArray(result.players)) result.players = [];
+  // The public contract always includes seat:null for standing participants;
+  // the Lua sentinel never reaches browser snapshots.
+  for (const player of result.players) if (player.seat === -1) player.seat = null;
   return result;
 }

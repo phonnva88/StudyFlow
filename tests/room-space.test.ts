@@ -5,8 +5,8 @@ import { promisify } from 'node:util';
 import { NextRequest } from 'next/server';
 import { roomSpaceEndpoint } from '../src/lib/room-space-api';
 import { musicSession } from '../src/lib/music-session';
-import { roomSpaceScript } from '../src/lib/room-space-store';
-import { ROOM_SPACE_BOUNDS, ROOM_SPACE_OBSTACLES, ROOM_SPACE_SEATS, roomSpaceCanStand, validRoomSpaceSnapshot } from '../src/lib/room-space';
+import { roomSpaceScript, updateRoomSpace } from '../src/lib/room-space-store';
+import { ROOM_SPACE_BOUNDS, ROOM_SPACE_OBSTACLES, ROOM_SPACE_SEATS, ROOM_SPACE_COLLISION_EPSILON, roomSpaceCanStand, validRoomSpaceSnapshot } from '../src/lib/room-space';
 
 const id = 'a'.repeat(32);
 const actor = 'participant-11111111-1111-4111-8111-111111111111';
@@ -25,6 +25,21 @@ test('room geometry keeps seats accessible while rejecting wall/furniture and in
   assert.ok(validRoomSpaceSnapshot(snapshot));
   assert.ok(!validRoomSpaceSnapshot({...snapshot, players: [{...snapshot.players[0], x: NaN}]}));
   assert.ok(!validRoomSpaceSnapshot({...snapshot, players: [null]}));
+});
+
+test('serialized collision boundaries remain valid without allowing penetration into furniture', () => {
+  // Lua accepts -5.380000000000001, then cjson encodes it as -5.38.
+  const rounded = JSON.parse('{"x":-5.38,"z":-2.3}');
+  assert.ok(roomSpaceCanStand(rounded.x, rounded.z));
+  assert.ok(roomSpaceCanStand(-5.380000000000001, -2.3));
+  assert.ok(!roomSpaceCanStand(-5.38 + ROOM_SPACE_COLLISION_EPSILON * 10, -2.3));
+  assert.ok(!roomSpaceCanStand(ROOM_SPACE_BOUNDS.maxX - 0.28 + ROOM_SPACE_COLLISION_EPSILON * 10, 4));
+  assert.ok(validRoomSpaceSnapshot({players: [{identity: target, name: 'Bob', ...rounded, yaw: 0, seat: null, updatedAt: 1}], serverNow: 1, version: 1}));
+  const atMargin = -5.38 + ROOM_SPACE_COLLISION_EPSILON - 1e-15;
+  const serializedMargin = Number(atMargin.toPrecision(14));
+  assert.ok(roomSpaceCanStand(atMargin, -2.3));
+  assert.ok(!roomSpaceCanStand(serializedMargin, -2.3)); // Movement retains its tighter limit.
+  assert.ok(validRoomSpaceSnapshot({players: [{identity: target, name: 'Bob', x: serializedMargin, z: -2.3, yaw: 0, seat: null, updatedAt: 1}], serverNow: 1, version: 1}));
 });
 
 test('space API requires connected signed identity, ignores ownership claims and performs real provider removal', async t => {
@@ -99,7 +114,7 @@ test('real Redis atomically owns seats, validates movement/reach, cools down hit
   snapshot = await update();
   assert.equal((await update('punch', {target})).code, 409); // Seated actor cannot punch.
   snapshot = await update('stand');
-  assert.equal(snapshot.players.find((p: {identity: string}) => p.identity === actor).seat, null);
+  assert.equal(snapshot.players.find((p: {identity: string}) => p.identity === actor).seat, -1); // Internal Lua sentinel; updateRoomSpace emits null.
   assert.equal((await update('sit', {seat: 1})).code, 409); // Occupied seat.
   assert.equal((await update('punch', {target})).code, 409); // Too far away.
   let saved = JSON.parse(await command('GET', spaceKey));
@@ -130,4 +145,136 @@ test('real Redis atomically owns seats, validates movement/reach, cools down hit
   assert.equal((await update()).code, 410);
   assert.equal(await command('GET', spaceKey), null);
   await command('DEL', roomKey);
+});
+
+test('real Redis and Upstash decoding keep E sit/stand valid beside a rounded peer position', {skip: process.env.STUDYFLOW_ROOM_SPACE_REDIS_TEST !== '1'}, async t => {
+  config();
+  const exec = promisify(execFile);
+  const command = async (...args: string[]) => JSON.parse((await exec('docker', ['--host=unix:///var/run/docker.sock', 'exec', 'studyflow-room-space-test', 'redis-cli', '--json', ...args])).stdout);
+  // Relay the real Redis result through the same REST response envelope and
+  // Upstash SDK deserializer as production, rather than hand-building snapshots.
+  t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
+    assert.ok(String(url).startsWith('https://test.upstash.io'));
+    const body = JSON.parse(String(init?.body));
+    const execute = async (args: unknown[]) => ({result: await command(...args.map(String))});
+    return Response.json(Array.isArray(body[0]) ? await Promise.all(body.map(execute)) : await execute(body));
+  });
+  const roomKey = `studyflow:room:${id}`, spaceKey = `studyflow:space:${id}`;
+  const members = Array.from({length: 6}, (_, i) => ({identity: `participant-${String(i + 1).repeat(8)}-${String(i + 1).repeat(4)}-4${String(i + 1).repeat(3)}-8${String(i + 1).repeat(3)}-${String(i + 1).repeat(12)}`, name: `Member ${i + 1}`}));
+  await command('SET', roomKey, JSON.stringify({state: 'LIVE', expiresAt: Date.now() + 60000}));
+  await command('DEL', spaceKey);
+  t.after(async () => { await command('DEL', roomKey, spaceKey); });
+  const update = (action = 'snapshot', input = {}, identity = actor) => updateRoomSpace(id, identity, members, action, input);
+  assert.ok(validRoomSpaceSnapshot(await update()));
+  for (const [seat, member] of members.entries()) {
+    const standing = await update('stand', {}, member.identity);
+    assert.ok(validRoomSpaceSnapshot(standing), `Standing from chair ${seat + 1} must return valid wire data.`);
+    assert.equal(standing.players.find(p => p.identity === member.identity)?.seat, null);
+    const seated = await update('sit', {seat}, member.identity);
+    assert.ok(validRoomSpaceSnapshot(seated), `Sitting in chair ${seat + 1} must return valid wire data.`);
+    assert.equal(seated.players.find(p => p.identity === member.identity)?.seat, seat);
+  }
+  const saved = JSON.parse(await command('GET', spaceKey));
+  Object.assign(saved.players[target], {seat: null, x: -5.5, z: -2.3, lastMove: Date.now() - 1000});
+  await command('SET', spaceKey, JSON.stringify(saved));
+  const moved = await update('move', {x: -5.380000000000001, z: -2.3, yaw: 0}, target);
+  assert.equal(moved.players.find(p => p.identity === target)?.x, -5.38);
+  assert.ok(validRoomSpaceSnapshot(moved), 'A legal move must remain valid after Lua JSON encoding.');
+  const atMargin = JSON.parse(await command('GET', spaceKey));
+  atMargin.players[target].lastMove = Date.now() - 1000;
+  await command('SET', spaceKey, JSON.stringify(atMargin));
+  assert.ok(validRoomSpaceSnapshot(await update('move', {x: -5.38 + ROOM_SPACE_COLLISION_EPSILON - 1e-15, z: -2.3, yaw: 0}, target)), 'Wire tolerance must also cover JSON rounding at the physics margin.');
+  // The rounded position is now persisted. Another user's E action must work
+  // without clearing the room state or rejecting the entire players array.
+  assert.ok(validRoomSpaceSnapshot(await update('stand')));
+  assert.ok(validRoomSpaceSnapshot(await update('sit', {seat: 0})));
+  const corrected = JSON.parse(await command('GET', spaceKey));
+  corrected.players[target].lastMove = Date.now() - 1000;
+  await command('SET', spaceKey, JSON.stringify(corrected));
+  await assert.rejects(() => update('move', {x: -5.3, z: -2.3, yaw: 0}, target), /cannot walk through/);
+});
+
+test('standing snapshots do not depend on Lua cjson.null and migrate legacy seats', {skip: process.env.STUDYFLOW_ROOM_SPACE_REDIS_TEST !== '1'}, async t => {
+  config();
+  const exec = promisify(execFile);
+  const command = async (...args: string[]) => JSON.parse((await exec('docker', ['--host=unix:///var/run/docker.sock', 'exec', 'studyflow-room-space-test', 'redis-cli', '--json', ...args])).stdout);
+  t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
+    assert.ok(String(url).startsWith('https://test.upstash.io'));
+    const body = JSON.parse(String(init?.body));
+    const execute = async (args: unknown[]) => {
+      const wire = args.map(String);
+      // Exercise the actual Lua and SDK with a provider that supplies cjson's
+      // encode/decode functions but no cjson.null value.
+      if (wire[0].toUpperCase() === 'EVAL') wire[1] = `local cjson={encode=cjson.encode,decode=cjson.decode}\n${wire[1]}`;
+      return {result: await command(...wire)};
+    };
+    return Response.json(Array.isArray(body[0]) ? await Promise.all(body.map(execute)) : await execute(body));
+  });
+  const testId = 'd'.repeat(32), roomKey = `studyflow:room:${testId}`, spaceKey = `studyflow:space:${testId}`;
+  const members = Array.from({length: 6}, (_, i) => ({identity: `participant-${String(i + 1).repeat(8)}-${String(i + 1).repeat(4)}-4${String(i + 1).repeat(3)}-8${String(i + 1).repeat(3)}-${String(i + 1).repeat(12)}`, name: `Member ${i + 1}`}));
+  await command('SET', roomKey, JSON.stringify({state: 'LIVE', expiresAt: Date.now() + 60000}));
+  await command('DEL', spaceKey);
+  t.after(async () => { await command('DEL', roomKey, spaceKey); });
+  const update = (action = 'snapshot', input = {}, identity = actor) => updateRoomSpace(testId, identity, members, action, input);
+  assert.ok(validRoomSpaceSnapshot(await update()));
+  for (const [seat, member] of members.entries()) {
+    const standing = await update('stand', {}, member.identity);
+    assert.ok(validRoomSpaceSnapshot(standing), `Standing from chair ${seat + 1} must preserve a nullable public seat.`);
+    assert.equal(standing.players.find(p => p.identity === member.identity)?.seat, null);
+    const seated = await update('sit', {seat}, member.identity);
+    assert.ok(validRoomSpaceSnapshot(seated));
+    assert.equal(seated.players.find(p => p.identity === member.identity)?.seat, seat);
+  }
+  // Both old Redis encodings must recover without clearing the room. A seated
+  // peer in chair zero must retain ownership while standing peers are migrated.
+  const legacy = JSON.parse(await command('GET', spaceKey));
+  const third = members[2].identity;
+  Object.assign(legacy.players[target], {seat: null, z: -0.55, lastMove: Date.now() - 1000});
+  Object.assign(legacy.players[third], {z: -0.55, lastMove: Date.now() - 1000});
+  delete legacy.players[third].seat;
+  await command('SET', spaceKey, JSON.stringify(legacy));
+  const migrated = await update();
+  assert.ok(validRoomSpaceSnapshot(migrated));
+  assert.equal(migrated.players.find(p => p.identity === actor)?.seat, 0);
+  assert.equal(migrated.players.find(p => p.identity === target)?.seat, null);
+  assert.equal(migrated.players.find(p => p.identity === third)?.seat, null);
+  const persisted = JSON.parse(await command('GET', spaceKey));
+  assert.equal(persisted.players[target].seat, -1);
+  assert.equal(persisted.players[third].seat, -1);
+  assert.ok(validRoomSpaceSnapshot(await update('move', {x: 0.1, z: -0.55, yaw: 0}, target)));
+  await update('sit', {seat: 1}, target);
+  await update('sit', {seat: 2}, third);
+
+  await update('stand');
+  const near = JSON.parse(await command('GET', spaceKey));
+  Object.assign(near.players[actor], {x: 0, z: -0.55, lastMove: Date.now() - 1000});
+  await command('SET', spaceKey, JSON.stringify(near));
+  const punched = await update('punch', {target});
+  assert.ok(validRoomSpaceSnapshot(punched));
+  assert.equal(punched.removedIdentity, target);
+  assert.ok(!punched.players.some(p => p.identity === target));
+  const rolledBack = await update('rollback', {target, reservation: punched.reservation});
+  assert.ok(validRoomSpaceSnapshot(rolledBack));
+  assert.equal(rolledBack.players.find(p => p.identity === target)?.seat, 1);
+  await update('stand', {}, target);
+  await assert.rejects(() => update('punch', {target}), /Only someone sitting/);
+
+  // Legacy rollback reservations may also contain null/omitted seats. Restoring
+  // a standing participant must not compete for another standing user's chair.
+  for (const missing of [false, true]) {
+    const saved = JSON.parse(await command('GET', spaceKey));
+    saved.restore[target] = {...saved.players[target], seat: null};
+    if (missing) delete saved.restore[target].seat;
+    delete saved.players[target];
+    const reservation = Date.now() + 60000;
+    saved.ejected[target] = reservation;
+    await command('SET', spaceKey, JSON.stringify(saved));
+    const restored = await update('rollback', {target, reservation});
+    assert.ok(validRoomSpaceSnapshot(restored));
+    assert.equal(restored.players.find(p => p.identity === target)?.seat, null);
+    const stored = JSON.parse(await command('GET', spaceKey));
+    assert.equal(stored.players[target].seat, -1);
+    assert.equal(stored.restore[target], undefined);
+    assert.equal(stored.ejected[target], undefined);
+  }
 });
