@@ -6,6 +6,7 @@ import { getRecord, transition } from "@/lib/room-store";
 import { hostCookie, isHost } from "@/lib/auth";
 import { ensureStudyRoom, issueToken, livekitRoom, MAX_PARTICIPANTS, roomService } from "@/lib/livekit";
 import { configuration } from "@/lib/config";
+import { musicSession } from "@/lib/music-session";
 export const runtime = "nodejs";
 export async function POST(
   request: NextRequest,
@@ -27,15 +28,16 @@ export async function POST(
       room.hostHash,
     );
     if (room.state === "CREATED") await transition(id, "LIVE");
+    const identity = `participant-${randomUUID()}`;
     const token = await issueToken(
       id,
       host ? room.hostName : nickname,
       host,
-      `participant-${randomUUID()}`,
+      identity,
     );
     // Fail closed if an end action raced token creation.
     await getRecord(id);
-    return json({ token, serverUrl: configuration().url, isHost: host });
+    return json({ token, serverUrl: configuration().url, isHost: host, musicSession: musicSession(id, identity, room.expiresAt) });
   } catch (error) {
     return fail(error);
   }

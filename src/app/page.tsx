@@ -7,6 +7,7 @@ import {
   ArrowRight, Check, Headphones, LoaderCircle,
   MessageCircle, MonitorUp, Radio, ShieldCheck, Video,
 } from 'lucide-react';
+import { Navigation } from '@/components/navigation';
 import { Brand } from '@/components/brand';
 import { SiteHeader } from '@/components/site-header';
 import { Button } from '@/components/ui/button';

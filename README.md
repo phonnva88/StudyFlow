@@ -120,3 +120,54 @@ Use an HTTPS deployment with actual LiveKit Cloud and Upstash credentials:
 - `src/components/ui`: shadcn/ui component source; theme tokens live in `src/app/globals.css`.
 - `src/lib`: validation, creator-cookie authorization, Redis state/rate limits, LiveKit configuration/tokens, and discovery presence/DTOs.
 - `tests`: security/API contracts; `tests/browser`: production browser checks.
+
+## Public room discovery (Phase 3)
+
+Open `/explore` from Home or a room to browse public study rooms. Search titles, filter All / Active / Empty / Available, and sort newest / most / least participants. Cards show creator, creation time, LiveKit participant count, six-person capacity, and ACTIVE / EMPTY / FULL status. Full takes precedence; webcam and screen tracks are not counted as extra people. Join Room opens the existing nickname/join flow.
+
+Public visibility is an explicit creation option. Existing rooms and older API clients without visibility remain Private. Private rooms are unlisted and the existing unpredictable invitation URL is a bearer capability: anyone given that link can join; this is not a verified-membership or password system. No private IDs or creator credentials are exposed in the listing API.
+
+`GET /api/rooms` exhausts Redis SCAN, deduplicates keys and batch-loads metadata. Expired, ended, deleted and private rooms are excluded. LiveKit ListRooms provides presence, with metadata rechecked afterward. A valid application room with no media room is EMPTY and stays discoverable. Provider failures return an error rather than invented counts. The browser polls every 12 seconds. Token issuance rechecks room validity and capacity, with LiveKit admission enforcing concurrent joins. No new environment variables, migration, or process-local storage is used. This MVP scans active metadata per request; larger deployments should add a public-room index with server pagination/search.
+
+## Shared room music (Phase 4)
+
+### YouTube and Spotify sources
+
+In Room Music, choose YouTube or Spotify, enter a song title or artist, then press Search. Up to ten results show provider artwork, title, artist/channel and a link to the original provider. Request a YouTube result to add it to the shared queue, or open a Spotify result in the personal embed. Pasting provider links remains available. Search runs only on explicit submission, with loading, empty, error and retry states; changing the query/provider cancels stale results. YouTube title, channel and artwork are resolved on the server when a request is queued, so client-supplied metadata is never trusted. New queue/current items show this metadata too; existing items keep their saved metadata.
+
+Playback uses the official, visible YouTube IFrame Player API, with the existing creator play/pause/skip controls and shared Redis timeline. Enable Room Music on each browser; YouTube may additionally require Play in its own player. Videos disabled for embedding, age/region restrictions, removed/private videos, ads, buffering, and autoplay policies can limit playback or synchronization. No audio is extracted, downloaded, or rebroadcast.
+
+For search, configure server-only `YOUTUBE_API_KEY` (enable **YouTube Data API v3** in Google Cloud), and `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` from a Spotify developer application. Spotify app access, development-mode eligibility and quota are controlled by Spotify. No listener Spotify account is needed to search; playback/account restrictions still apply. Do not prefix credentials with `NEXT_PUBLIC_`. Add these variables to the deployment and redeploy. Missing credentials or provider access/quota failures return a clear setup/service error. Without search credentials, pasting links and existing playback still work; YouTube links without a configured key retain their video-ID label.
+
+Search uses `GET /api/rooms/[id]/music/search?provider=youtube|spotify&q=...`, requiring the same signed room session and connected LiveKit participant as other music calls. Queries must be 2–100 characters. Limits are five searches/minute/participant and twenty/minute/room. YouTube searches are also capped at eighty per 24-hour window across the deployment because each official search costs 100 quota units; this reserves some of the default daily quota for metadata calls. These counters use the existing Redis database. Provider requests time out after eight seconds. Spotify access tokens stay on the server and are reused until shortly before expiry; tokens, secrets and raw provider errors are never sent to the client. No migration is needed.
+
+YouTube duration is not invented or trusted from user input. When the creator's YouTube player reports the video ended, it advances the version-checked queue. Therefore automatic advance for YouTube requires the creator to remain connected with music enabled. Other listeners cannot advance global playback. Creator Skip remains available if an embed fails. Built-in WAV tracks retain server-timed advancement.
+
+Spotify links open an official personal embed, supporting track/album/playlist/episode URLs. Spotify playback uses Spotify's controls and does not enter the synchronized room queue. Account/subscription, previews, regional availability and autoplay behavior depend on Spotify. Global room controls, local Room Music volume and mute do not control the Spotify embed. Use its own controls; pause other audio to avoid overlap. There is no Spotify extraction or claim of full-track synchronized playback.
+
+The collapsible Room Music panel sits below chat. Everyone can search YouTube or Spotify by title/artist; YouTube results can be requested for the shared queue, while Spotify results open in a personal player. The creator starts playback, pauses/resumes, skips, or removes queued requests. The first song waits for the creator to press Play; subsequent songs advance automatically while clients poll. Tracks are FIFO, limited to 20 queued requests, with no duplicate queued/current track and five requests per connected identity per minute.
+
+Music starts disabled for every listener. Select **Enable Room Music** to hear it. Each participant's volume and mute affect only their local music, independently of conversation audio. Use headphones to reduce microphone echo, and do not capture this tab's audio during screen sharing. The app never publishes its music element into LiveKit tracks. Browser autoplay restrictions, buffering and device limitations can still require another explicit enable action.
+
+The included Quiet Orbit and Soft Morning are original 45-second ambient compositions synthesized for this project, without third-party samples. Their CC0 dedication and provenance are in `public/music/LICENSE.md`; regenerate the PCM WAV assets with `node scripts/render-study-music.mjs`. Built-in tracks are served by the application. To add built-in songs, place authorized files in `public/music`, add validated metadata to `src/lib/music-catalog.ts`, and keep evidence that the license permits public web playback and redistribution. Duration must match the asset. User supplied sources are restricted to validated YouTube links and Spotify's official embed; arbitrary audio URLs, uploads, and extraction APIs are not accepted. Maintainer added HTTPS tracks require review of rights, availability, and seeking/range support.
+
+Redis Lua transactions maintain one logical music state and queue per room. Redis TIME defines the timeline. Transactions serialize requests and automatic advancement; version-checked creator controls reject stale/repeated commands. Snapshots are fetched every two seconds, with reliable LiveKit data notifications as refresh hints. Clients never trust a data message as authoritative state. New listeners seek to the server timeline, account for approximately half the request latency, ignore older versions/snapshots, and correct drift above one second. This targets roughly 1–2 second agreement on healthy connections, not sample-perfect playback. A stale snapshot or disconnected media session pauses local audio.
+
+There is no background scheduler: after ten seconds without an authorized snapshot, the next request pauses the timeline at the last observed snapshot rather than advancing an unattended playlist. This conservative inactivity rule also applies when every browser is suspended/background-throttled. The creator presses Play to resume after returning. Refresh/reconnect gets the existing Redis state; another participant's departure does not reset it. State expires with the room's TTL and is atomically deleted when the room is ended.
+
+Music credentials are signed, room-bound, expiring session tokens issued with the existing join response. Every music API checks the LiveKit identity is still present; nicknames/roles from requests do not establish identity or creator privileges. Attribution uses the provider's participant name. Global controls additionally require the creator cookie, and writes require same-origin requests. Session credentials stay in browser memory and never become LiveKit administrator credentials. Music keys are separate from discovery metadata and cannot appear in Explore.
+
+APIs: `GET /api/music/tracks`, `GET /api/rooms/[id]/music`, `GET /api/rooms/[id]/music/search`, `POST /api/rooms/[id]/music/requests`, `POST /api/rooms/[id]/music/play|pause|skip`, and `DELETE /api/rooms/[id]/music/queue/[requestId]`. Room music calls use `Authorization: Bearer <musicSession>` from the join response; controls send `expectedVersion`. Playback uses the existing five service variables; provider search additionally uses the three optional credentials described above and in `.env.example`.
+
+### Additional verification
+
+`npm test` covers discovery privacy/presence, room-bound music credentials, trusted attribution and creator authorization. An optional test executes the actual Lua against disposable Redis (Docker is for tests only):
+
+```sh
+docker run -d --name studyflow-music-redis-test redis:7-alpine redis-server --save '' --appendonly no
+STUDYFLOW_REDIS_TEST=1 npx tsx --test tests/music.test.ts
+docker stop studyflow-music-redis-test
+docker rm studyflow-music-redis-test
+```
+
+Verify on an HTTPS deployment using real LiveKit/Upstash credentials: public/private discovery including empty/full/ended rooms; search/filter/sort and mobile navigation; two or more participants requesting songs; creator-only controls; autoplay enable, local mute/volume, late-join alignment, pause/resume, skip, automatic next track, duplicate requests, buffering, reconnect and inactivity behavior. Also confirm multiple cameras, screen shares and chat remain functional while music plays. Automated service stubs and local Redis tests do not prove Cloud transport, multi-device audio alignment, or a Vercel deployment.

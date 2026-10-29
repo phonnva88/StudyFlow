@@ -10,6 +10,7 @@ import { ConnectionState, Track } from 'livekit-client';
 import { LoaderCircle, LogOut, Mic, MicOff, MonitorUp, Users, Video, VideoOff } from 'lucide-react';
 import { api, type RoomInfo } from './room-client';
 import { Chat } from './chat';
+import { MusicPanel } from './music-panel';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
@@ -37,7 +38,7 @@ function StudyTile({ track }: { track: TrackReferenceOrPlaceholder }) {
   );
 }
 
-export function Studio({ info, onEnded, onLeave }: { info: RoomInfo; onEnded: () => void; onLeave: () => void }) {
+export function Studio({ info, musicSession, onEnded, onLeave }: { info: RoomInfo; musicSession: string; onEnded: () => void; onLeave: () => void }) {
   const room = useRoomContext();
   const connection = useConnectionState();
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -107,7 +108,7 @@ export function Studio({ info, onEnded, onLeave }: { info: RoomInfo; onEnded: ()
           </DialogContent>
         </Dialog>}
       </section>
-      <Chat />
+      <aside className="min-w-0 space-y-4"><Chat /><MusicPanel id={info.id} session={musicSession} isHost={info.isHost} /></aside>
     </main>
   );
 }
