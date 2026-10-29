@@ -6,16 +6,20 @@ import {
   hostCookie,
 } from "@/lib/auth";
 import { body, fail, json, limit, sameOrigin } from "@/lib/http";
-import { text, visibility } from "@/lib/validation";
-import { createRecord, ROOM_TTL } from "@/lib/room-store";
+import { HttpError, text } from "@/lib/validation";
+import { createRecord, listPublicRecords, ROOM_TTL } from "@/lib/room-store";
+import { discoverRooms } from "@/lib/room-discovery";
 import { ensureStudyRoom, livekitRoom, roomService } from "@/lib/livekit";
 import { discoverRooms } from "@/lib/discovery";
 export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   try {
-    await limit(request, "explore", 60);
-    return json({ rooms: await discoverRooms() });
-  } catch (error) { return fail(error); }
+    await limit(request, "discovery", 30);
+    const rooms = await discoverRooms(await listPublicRecords());
+    return json({ rooms: rooms.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id)) });
+  } catch (error) {
+    return fail(error);
+  }
 }
 export async function POST(request: NextRequest) {
   try {
@@ -23,7 +27,9 @@ export async function POST(request: NextRequest) {
     const input = await body(request);
     const hostName = text(input.nickname, "Nickname", 32);
     const title = text(input.title, "Room title", 80);
-    const roomVisibility = visibility(input.visibility);
+    const visibility = input.visibility ?? "PUBLIC";
+    if (visibility !== "PUBLIC" && visibility !== "PRIVATE")
+      throw new HttpError(400, "Choose public or invite-only room visibility.");
     await limit(request, "create", 5);
     const id = newRoomId();
     const credential = newHostCredential();
@@ -36,7 +42,7 @@ export async function POST(request: NextRequest) {
         hostName,
         hostHash: hashCredential(credential),
         state: "CREATED",
-        visibility: roomVisibility,
+        visibility,
         createdAt: Date.now(),
         expiresAt: Date.now() + ROOM_TTL * 1000,
       });

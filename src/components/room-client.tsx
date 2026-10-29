@@ -4,8 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { LiveKitRoom } from '@livekit/components-react';
 import { ArrowRight, Check, Copy, LoaderCircle, Radio } from 'lucide-react';
-import { Navigation } from './navigation';
-import { Brand } from '@/components/brand';
+import { SiteHeader } from '@/components/site-header';
 import { Studio } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -19,6 +18,9 @@ export interface RoomInfo {
   state: 'CREATED' | 'LIVE' | 'ENDED';
   expiresAt: number;
   isHost: boolean;
+  status?: 'ACTIVE' | 'EMPTY' | 'FULL';
+  participantCount?: number;
+  maxParticipants?: number;
 }
 
 export async function api(path: string, data: unknown = {}) {
@@ -100,9 +102,7 @@ export function RoomClient({ id }: { id: string }) {
 
   return (
     <div className="min-h-screen">
-      <header className="mx-auto flex min-h-20 max-w-7xl flex-wrap items-center justify-between gap-4 py-4 border-b border-border/70 px-5 sm:px-8">
-        <Brand /><Navigation /><InviteButton />
-      </header>
+      <SiteHeader><InviteButton /></SiteHeader>
 
       {ended || fatal ? (
         <main className="mx-auto flex min-h-[65vh] max-w-lg flex-col items-center justify-center gap-5 px-6 text-center">
@@ -119,7 +119,7 @@ export function RoomClient({ id }: { id: string }) {
             <p className="text-xs text-muted-foreground">Use this if the media session did not finish closing.</p>
             {error && <p className="text-sm text-muted-foreground" role="status">{error}</p>}
           </>}
-          <Button asChild><Link href="/">Back to StudyFlow <ArrowRight /></Link></Button>
+          <Button asChild><Link href="/explore">Explore Rooms <ArrowRight /></Link></Button>
         </main>
       ) : !info ? (
         <main className="mx-auto flex min-h-[65vh] max-w-lg flex-col items-center justify-center gap-5 px-6 text-center">
@@ -135,7 +135,7 @@ export function RoomClient({ id }: { id: string }) {
             </div>
             <span className="inline-flex shrink-0 items-center gap-2 rounded-full border border-border px-3 py-2 text-[10px] tracking-wider text-muted-foreground">
               <span className={`size-2 rounded-full ${info.state === 'LIVE' ? 'bg-primary' : 'bg-muted-foreground'}`} />
-              {info.state === 'LIVE' ? 'LIVE' : 'OPEN'}
+              {info.status ?? (info.state === 'LIVE' ? 'LIVE' : 'OPEN')}
             </span>
           </div>
 

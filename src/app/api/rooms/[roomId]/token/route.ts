@@ -4,7 +4,7 @@ import { body, fail, json, limit, sameOrigin } from "@/lib/http";
 import { HttpError, roomId, text } from "@/lib/validation";
 import { getRecord, transition } from "@/lib/room-store";
 import { hostCookie, isHost } from "@/lib/auth";
-import { ensureStudyRoom, issueToken, roomService, livekitRoom, MAX_PARTICIPANTS } from "@/lib/livekit";
+import { ensureStudyRoom, issueToken, livekitRoom, MAX_PARTICIPANTS, roomService } from "@/lib/livekit";
 import { configuration } from "@/lib/config";
 import { musicSession } from "@/lib/music-session";
 export const runtime = "nodejs";
@@ -20,10 +20,9 @@ export async function POST(
     await limit(request, "join", 40);
     const room = await getRecord(id);
     await ensureStudyRoom(id);
-    // Preflight gives a useful error; LiveKit admission remains authoritative
-    // for the race where several users connect with freshly issued tokens.
-    if ((await roomService().listParticipants(livekitRoom(id))).length >= MAX_PARTICIPANTS)
-      throw new HttpError(409, "This study room is full (6 participants). Please try again after someone leaves.");
+    const participants = await roomService().listParticipants(livekitRoom(id));
+    if (new Set(participants.map(participant => participant.identity)).size >= MAX_PARTICIPANTS)
+      throw new HttpError(409, "This study room is full. Wait for someone to leave and try again.");
     const host = isHost(
       request.cookies.get(hostCookie(id))?.value,
       room.hostHash,
