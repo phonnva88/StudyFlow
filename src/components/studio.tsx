@@ -1,16 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   RoomAudioRenderer, StartAudio, VideoTrack, useTracks, useParticipants,
   useLocalParticipant, useRoomContext, useConnectionState, useIsMuted,
   useParticipantInfo, isTrackReference, type TrackReferenceOrPlaceholder,
 } from '@livekit/components-react';
-import { ConnectionState, Track } from 'livekit-client';
+import { ConnectionState, RoomEvent, Track } from 'livekit-client';
 import { LoaderCircle, LogOut, Mic, MicOff, MonitorUp, Users, Video, VideoOff } from 'lucide-react';
 import { api, type RoomInfo } from './room-client';
 import { Chat } from './chat';
 import { MusicPanel } from './music-panel';
+import { RoomSpacePanel, type RoomView } from './room-space-panel';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
@@ -38,7 +39,7 @@ function StudyTile({ track }: { track: TrackReferenceOrPlaceholder }) {
   );
 }
 
-export function Studio({ info, musicSession, onEnded, onLeave }: { info: RoomInfo; musicSession: string; onEnded: () => void; onLeave: () => void }) {
+export function Studio({ info, musicSession, view, onViewChange, onKnockedOut, onEnded, onLeave }: { info: RoomInfo; musicSession: string; view: RoomView; onViewChange: (view: RoomView) => void; onKnockedOut: () => void; onEnded: () => void; onLeave: () => void }) {
   const room = useRoomContext();
   const connection = useConnectionState();
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -54,6 +55,15 @@ export function Studio({ info, musicSession, onEnded, onLeave }: { info: RoomInf
   const [busy, setBusy] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const screenSupported = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+  useEffect(() => {
+    const removed = (payload: Uint8Array, participant?: unknown, _kind?: unknown, topic?: string) => {
+      // Only the server can send a packet without a participant identity.
+      if (participant || topic !== 'studyflow.space.changed' || payload.byteLength > 512) return;
+      try { if (JSON.parse(new TextDecoder().decode(payload)).removedIdentity === localParticipant.identity) onKnockedOut(); } catch {}
+    };
+    room.on(RoomEvent.DataReceived, removed);
+    return () => { room.off(RoomEvent.DataReceived, removed); };
+  }, [room, localParticipant.identity, onKnockedOut]);
 
   async function action(fn: () => Promise<unknown>) {
     setBusy(true); setError('');
@@ -77,12 +87,17 @@ export function Studio({ info, musicSession, onEnded, onLeave }: { info: RoomInf
           <span className="inline-flex items-center gap-2">{!connected && <LoaderCircle className="size-4 animate-spin" />}{connected ? 'Everyone can share. Make yourself at home.' : connection === ConnectionState.Reconnecting || connection === ConnectionState.SignalReconnecting ? 'Reconnecting… Your place is kept while we reconnect.' : 'Connecting to your study room…'}</span>
           <span className="inline-flex items-center gap-2"><Users className="size-4" />{participants.length}/6 participants</span>
         </div>
+        <div role="group" aria-label="Room view" className="mb-4 flex flex-wrap gap-2">
+          <Button size="sm" variant={view === 'grid' ? 'secondary' : 'outline'} aria-pressed={view === 'grid'} onClick={() => onViewChange('grid')}>Grid view</Button>
+          <Button size="sm" variant={view === 'first-person' ? 'secondary' : 'outline'} aria-pressed={view === 'first-person'} onClick={() => onViewChange('first-person')}>First-person view</Button>
+        </div>
         {!!screens.length && <section aria-label="Shared screens" className={`mb-4 grid gap-3 ${screens.length > 1 ? 'md:grid-cols-2' : ''}`}>
           {screens.map(track => <StudyTile key={`${track.participant.identity}:screen`} track={track} />)}
         </section>}
-        <section aria-label="Study participants" className={`grid gap-3 ${cameras.length > 1 ? 'sm:grid-cols-2' : ''} ${cameras.length > 4 && !screens.length ? 'xl:grid-cols-3' : ''}`}>
+        <section aria-label="Study participants" className={`${view === 'grid' ? 'grid' : 'hidden'} gap-3 ${cameras.length > 1 ? 'sm:grid-cols-2' : ''} ${cameras.length > 4 && !screens.length ? 'xl:grid-cols-3' : ''}`}>
           {cameras.map(track => <StudyTile key={track.participant.identity} track={track} />)}
         </section>
+        <RoomSpacePanel id={info.id} session={musicSession} view={view} />
         <RoomAudioRenderer />
         <StartAudio label="Enable room audio" className="mt-3 rounded-md border border-border bg-secondary px-3 py-2 text-sm text-secondary-foreground hover:bg-accent" />
 

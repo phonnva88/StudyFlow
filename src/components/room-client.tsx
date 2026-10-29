@@ -1,11 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { LiveKitRoom } from '@livekit/components-react';
+import { DisconnectReason } from 'livekit-client';
 import { ArrowRight, Check, Copy, LoaderCircle, Radio } from 'lucide-react';
 import { SiteHeader } from '@/components/site-header';
 import { Studio } from '@/components/studio';
+import type { RoomView } from '@/components/room-space-panel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -68,6 +70,8 @@ export function RoomClient({ id }: { id: string }) {
   const [session, setSession] = useState<{ token: string; serverUrl: string; isHost: boolean; musicSession: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [ended, setEnded] = useState(false);
+  const [view, setView] = useState<RoomView>('grid');
+  const knockedOut = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -94,6 +98,7 @@ export function RoomClient({ id }: { id: string }) {
     event.preventDefault();
     setBusy(true);
     setError('');
+    knockedOut.current = false;
     try {
       setSession(await api(`/api/rooms/${id}/token`, { nickname: info?.isHost ? info.hostName : nickname }));
     } catch (e) { setError(e instanceof Error ? e.message : 'Unable to join.'); }
@@ -146,6 +151,7 @@ export function RoomClient({ id }: { id: string }) {
                 <div><h2 className="text-2xl font-medium tracking-tight">{info.isHost ? 'Your space is ready.' : 'A little company awaits.'}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{info.isHost ? 'Join your study room, then turn on any devices you want to share.' : 'Choose a nickname to study, share, and chat together. Up to 6 people can join.'}</p></div>
                 <form className="w-full space-y-4 text-left" onSubmit={join}>
                   {!info.isHost && <div className="space-y-2"><Label htmlFor="viewer-name">Your nickname</Label><Input id="viewer-name" value={nickname} onChange={event => setNickname(event.target.value)} maxLength={32} required autoComplete="nickname" placeholder="What should we call you?" /></div>}
+                  <fieldset className="space-y-2"><legend className="text-sm font-medium">Choose your room view</legend><div className="grid gap-2 sm:grid-cols-2">{(['grid', 'first-person'] as const).map(option => <label key={option} className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-3 text-sm"><input type="radio" name="room-view" checked={view === option} onChange={() => setView(option)} />{option === 'grid' ? 'Grid view' : 'First-person view'}</label>)}</div><p className="text-xs text-muted-foreground">Switch views at any time. In this room, a nearby standing participant can punch a seated participant out; removed participants can rejoin.</p></fieldset>
                   <Button className="w-full" disabled={busy}>{busy ? <LoaderCircle className="animate-spin" /> : <>{info.isHost ? 'Enter room' : 'Join study room'} <ArrowRight /></>}</Button>
                 </form>
                 {(error || loadError) && <p className="w-full rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-red-200" role="alert">{error || loadError}</p>}
@@ -154,8 +160,8 @@ export function RoomClient({ id }: { id: string }) {
           ) : (
             <LiveKitRoom token={session.token} serverUrl={session.serverUrl} connect audio={false} video={false}
               onError={() => { setSession(null); setError('Unable to connect. Rooms allow up to 6 participants. Check your connection; if the room is full, wait for someone to leave and try again.'); }}
-              onDisconnected={() => { setSession(null); setError(current => current || 'You disconnected. You can rejoin while the room is active.'); }}>
-              <Studio info={{ ...info, isHost: session.isHost }} musicSession={session.musicSession} onLeave={() => { setSession(null); setError('You left the room. You can rejoin while it is open.'); }} onEnded={() => { setEnded(true); setSession(null); }} />
+              onDisconnected={reason => { setSession(null); setError(current => current || (knockedOut.current ? 'You were punched out of your chair and removed from the room. You can rejoin while it is open.' : reason === DisconnectReason.PARTICIPANT_REMOVED ? 'You were removed from this room. You can rejoin while it is open.' : 'You disconnected. You can rejoin while the room is active.')); }}>
+              <Studio info={{ ...info, isHost: session.isHost }} musicSession={session.musicSession} view={view} onViewChange={setView} onKnockedOut={() => { knockedOut.current = true; }} onLeave={() => { setSession(null); setError('You left the room. You can rejoin while it is open.'); }} onEnded={() => { setEnded(true); setSession(null); }} />
               {(error || loadError) && <div className="mx-auto my-4 max-w-7xl px-5 text-sm text-destructive" role="alert">{error || loadError}</div>}
             </LiveKitRoom>
           )}
