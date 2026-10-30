@@ -76,11 +76,14 @@ test("collaborative join keeps devices off and displays admission errors", async
   await page.goto(`/room/${id}`);
   await expect(page.getByRole("heading", { name: "Group study" })).toBeVisible();
   await expect(page.getByText("Up to 6 people can join.", { exact: false })).toBeVisible();
+  await expect(page.getByRole('radio', {name: 'Grid view', exact: true})).toBeChecked();
+  await page.getByRole('radio', {name: 'First-person view', exact: true}).check();
   await page.getByLabel("Your nickname").fill("Bob");
   await page.getByRole("button", { name: "Join study room" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "older configuration" })).toBeVisible();
   expect(await page.evaluate(() => Reflect.get(window, "deviceRequests"))).toBe(0);
   await expect(page.getByRole("button", { name: "Join study room" })).toBeEnabled();
+  await expect(page.getByRole('radio', {name: 'First-person view', exact: true})).toBeChecked();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 

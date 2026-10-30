@@ -1,45 +1,17 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import {
-  ArrowRight, Check, Headphones, LoaderCircle,
+  ArrowRight, Check, Headphones,
   MessageCircle, MonitorUp, Radio, ShieldCheck, Video,
 } from 'lucide-react';
-import { Navigation } from '@/components/navigation';
 import { Brand } from '@/components/brand';
 import { SiteHeader } from '@/components/site-header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { CreateRoomForm } from '@/components/create-room-form';
 
 export default function Home() {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function create(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    const data = new FormData(event.currentTarget);
-    try {
-      const response = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: data.get('nickname'), title: data.get('title'), visibility: data.get('visibility') }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error);
-      router.push(result.url);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unable to create a room. Please try again.');
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="min-h-screen overflow-hidden">
       <SiteHeader />
@@ -80,22 +52,7 @@ export default function Home() {
               </div>
             </CardHeader>
             <CardContent>
-              <form className="mt-5 space-y-5" onSubmit={create}>
-                <div className="space-y-2"><Label htmlFor="nickname">Your nickname</Label><Input id="nickname" name="nickname" placeholder="What should we call you?" autoComplete="nickname" required maxLength={32} disabled={busy} /></div>
-                <div className="space-y-2"><Label htmlFor="title">Room title</Label><Input id="title" name="title" placeholder="e.g. Late-night library hours" required maxLength={80} disabled={busy} /></div>
-                <div className="space-y-2">
-                  <Label htmlFor="visibility">Who can discover your room?</Label>
-                  <select id="visibility" name="visibility" defaultValue="PUBLIC" disabled={busy} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                    <option value="PUBLIC">Public — visible in Explore</option>
-                    <option value="PRIVATE">Invite-only — anyone with your link</option>
-                  </select>
-                  <p className="text-[11px] leading-5 text-muted-foreground">Public rooms welcome everyone. Invite-only rooms stay unlisted; share their link only with your study people.</p>
-                </div>
-                {error && <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-red-200" role="alert">{error}</p>}
-                <Button className="w-full justify-between" disabled={busy}>
-                  {busy ? <><LoaderCircle className="size-4 animate-spin" />Creating your room…</> : <>Create Room <ArrowRight className="size-4" /></>}
-                </Button>
-              </form>
+              <CreateRoomForm id="home-create-room" />
               <p className="mt-5 flex items-center justify-center gap-2 text-[10px] text-muted-foreground"><ShieldCheck size={14} />No account. No commitment. Just focus.</p>
             </CardContent>
           </Card>
