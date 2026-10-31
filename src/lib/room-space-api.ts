@@ -6,6 +6,7 @@ import { roomService, livekitRoom } from './livekit';
 import { verifyMusicSession } from './music-session';
 import { HttpError, roomId } from './validation';
 import { updateRoomSpace } from './room-space-store';
+import { closeAttendance } from './attendance-store';
 import { roomSpaceCanStand, ROOM_SPACE_SEATS } from './room-space';
 
 export async function roomSpaceEndpoint(request: NextRequest, rawId: string, write = false) {
@@ -49,6 +50,7 @@ export async function roomSpaceEndpoint(request: NextRequest, rawId: string, wri
         throw new HttpError(503, 'The punch could not disconnect that participant. Please try again.');
       }
     }
+    if(snapshot.removedIdentity) await closeAttendance(id,snapshot.removedIdentity);
     if (write && action !== 'move') await service.sendData(providerRoom, new TextEncoder().encode(JSON.stringify({version: snapshot.version, removedIdentity: snapshot.removedIdentity})), DataPacket_Kind.RELIABLE, {topic: 'studyflow.space.changed'}).catch(() => {});
     const {reservation: _reservation, ...publicSnapshot} = snapshot;
     void _reservation;

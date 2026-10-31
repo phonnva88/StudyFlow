@@ -129,7 +129,38 @@ Public visibility is an explicit creation option. Existing rooms and older API c
 
 `GET /api/rooms` exhausts Redis SCAN, deduplicates keys and batch-loads metadata. Expired, ended, deleted and private rooms are excluded. LiveKit ListRooms provides presence, with metadata rechecked afterward. A valid application room with no media room is EMPTY and stays discoverable. Provider failures return an error rather than invented counts. The browser polls every 12 seconds. Token issuance rechecks room validity and capacity, with LiveKit admission enforcing concurrent joins. No new environment variables, migration, or process-local storage is used. This MVP scans active metadata per request; larger deployments should add a public-room index with server pagination/search.
 
-## Two room views
+## Room attendance (Phase 6)
+
+Each camera/screen tile displays **time present in this room** as HH:MM:SS. First-person mode also has a compact participant timer list. These are attendance durations, not measurements of focused study or productivity. Only timer components update every second; video tiles are not driven by that clock.
+
+Attendance uses the existing Redis and signed room session, with LiveKit's server-issued identity, participant SID and join timestamp. Redis Lua serializes observations, totals connected segments and preserves a logical visit for a 30-second reconnect grace period. Confirmed offline time is excluded from the displayed duration. Repeated observations and duplicate/late departure events do not add time twice; older participant SIDs cannot disconnect a newer connection. Explicit Leave closes the visit and revokes the connection; the next join starts a new identity/visit. Ending a room deletes attendance state. Other records expire with the room's existing twelve-hour TTL. No analytics history is retained beyond that TTL.
+
+The existing signed session and nickname are saved in **per-tab sessionStorage** so a refresh can automatically request a fresh short-lived LiveKit token for the same visit. This is a bearer credential: keep the existing XSS protections. Nicknames are never used as identity. Storage-disabled browsers cannot resume after a full refresh. Duplicating a tab can copy its sessionStorage; those tabs represent the same participant and LiveKit may replace the previous connection. Use a fresh tab/browser profile for a separate participant.
+
+Configure a LiveKit Cloud webhook pointing to `https://YOUR_DOMAIN/api/livekit/webhook`, signed with the same `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` already configured on Vercel. Enable `participant_joined`, `participant_left`, and `room_finished`. The handler verifies the authorization token and raw body checksum using LiveKit's SDK. For localhost use an HTTPS tunnel; localhost itself cannot receive Cloud callbacks. No additional environment variables or services are required.
+
+Connected clients reconcile attendance with LiveKit every five seconds and on participant/reconnect/visibility events. Webhooks provide accurate departure times, including when the last browser disappears. Without webhooks, exact departure time cannot be reconstructed: the fallback counts only through the last confirmed presence and starts the grace period when absence is first observed. The uncertainty is normally one polling interval, but can be longer if all observers are suspended. Enable webhooks for reliable unattended disconnect accounting. Provider outages freeze the last confirmed timer rather than inventing connected time. Browser background throttling does not increment counters; returning to the tab recalculates from timestamps and refreshes the server snapshot.
+
+APIs (uncached): `GET /api/rooms/[id]/attendance`, `GET /api/rooms/[id]/attendance/me`, and `POST /api/rooms/[id]/attendance/leave`. They reuse `Authorization: Bearer <musicSession>`; reads require current LiveKit membership, Leave can only close the identity signed into that credential and requires same-origin. Request bodies cannot choose a participant or supply durations. Responses contain only current/reconnecting participants' identity, visit ID, status and server timestamps/totals; they do not expose creator credentials or private browser data.
+
+Verification:
+
+```sh
+npm test
+# Optional actual Redis/SDK/API suite (Docker, disposable test data):
+docker run -d --name studyflow-attendance-test redis:7-alpine --save '' --appendonly no
+STUDYFLOW_ATTENDANCE_REDIS_TEST=1 npx tsx --test tests/attendance.test.ts
+docker rm -f studyflow-attendance-test
+# Browser fixture: real RoomClient, Studio, timers; mocked HTTP/LiveKit transport:
+node tests/attendance-browser.mjs
+npm run lint
+npm run typecheck
+npm run build
+```
+
+On a configured deployment, verify with two browser profiles: independent timers, refresh within 30 seconds, temporary network loss/reconnect, Leave then new join, room end, and unchanged camera/microphone/screens/chat/music. Also test the signed Cloud webhook and an empty room departure. Local fixtures and Redis tests do not certify live Cloud delivery or network performance.
+
+## Two room views (Grid / first-person)
 
 Before entering a study room, choose **Grid view** (the existing camera interface) or **First-person view**. The same buttons inside the room switch layouts without reconnecting LiveKit or resetting camera/microphone/screen sharing, chat or music. Room media controls and shared screens remain available in both views. Three.js loads only when first-person view is opened. That view requires WebGL; unsupported or lost graphics contexts show an error/retry action while Grid remains available.
 

@@ -58,6 +58,7 @@ test('space API requires connected signed identity, ignores ownership claims and
       return Response.json({});
     }
     const command = (args: unknown[]) => {
+      if(String(args[4]).startsWith('studyflow:attendance:')) return {result: JSON.stringify({participants:[],serverNow:Date.now()})};
       if (String(args[0]).toLowerCase() === 'get') return {result: JSON.stringify({id, state: ended ? 'ENDED' : 'LIVE', expiresAt: Date.now() + 60000})};
       if (String(args[1]).includes('INCR')) return {result: 1};
       const action = String(args[5]);

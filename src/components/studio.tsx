@@ -10,6 +10,7 @@ import { ConnectionState, RoomEvent, Track } from 'livekit-client';
 import { LoaderCircle, LogOut, Mic, MicOff, MonitorUp, Users, Video, VideoOff } from 'lucide-react';
 import { api, type RoomInfo } from './room-client';
 import { Chat } from './chat';
+import { AttendanceProvider,AttendanceTimer,leaveAttendance } from './attendance';
 import { MusicPanel } from './music-panel';
 import { RoomSpacePanel, type RoomView } from './room-space-panel';
 import { Button } from '@/components/ui/button';
@@ -33,6 +34,7 @@ function StudyTile({ track }: { track: TrackReferenceOrPlaceholder }) {
       )}
       <div className="absolute inset-x-2 bottom-2 flex items-center justify-between gap-2 rounded-md bg-background/85 px-2 py-1.5 text-xs backdrop-blur">
         <span className="min-w-0 truncate">{nickname}{track.participant.isLocal ? ' · You' : ''}{screen ? ' · Screen' : ''}</span>
+        <AttendanceTimer identity={track.participant.identity} />
         <span aria-label={microphoneMuted ? 'Microphone muted' : 'Microphone on'}>{microphoneMuted ? <MicOff className="size-4 text-muted-foreground" /> : <Mic className="size-4 text-primary" />}</span>
       </div>
     </article>
@@ -81,7 +83,7 @@ export function Studio({ info, musicSession, view, onViewChange, onKnockedOut, o
   const connected = connection === ConnectionState.Connected;
 
   return (
-    <main className="mx-auto grid max-w-7xl gap-5 px-4 pb-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <AttendanceProvider id={info.id} session={musicSession}><main className="mx-auto grid max-w-7xl gap-5 px-4 pb-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <section className="min-w-0">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground" role="status">
           <span className="inline-flex items-center gap-2">{!connected && <LoaderCircle className="size-4 animate-spin" />}{connected ? 'Everyone can share. Make yourself at home.' : connection === ConnectionState.Reconnecting || connection === ConnectionState.SignalReconnecting ? 'Reconnecting… Your place is kept while we reconnect.' : 'Connecting to your study room…'}</span>
@@ -98,6 +100,7 @@ export function Studio({ info, musicSession, view, onViewChange, onKnockedOut, o
           {cameras.map(track => <StudyTile key={track.participant.identity} track={track} />)}
         </section>
         <RoomSpacePanel id={info.id} session={musicSession} view={view} />
+        {view==='first-person' && <div aria-label="Room attendance" className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs">{participants.map(p=><span key={p.identity} className="inline-flex max-w-full items-center gap-2"><span className="truncate">{p.name || 'Guest'}{p.isLocal?' · You':''}</span><AttendanceTimer identity={p.identity}/></span>)}</div>}
         <RoomAudioRenderer />
         <StartAudio label="Enable room audio" className="mt-3 rounded-md border border-border bg-secondary px-3 py-2 text-sm text-secondary-foreground hover:bg-accent" />
 
@@ -105,7 +108,7 @@ export function Studio({ info, musicSession, view, onViewChange, onKnockedOut, o
           <Button variant={isCameraEnabled ? 'secondary' : 'outline'} size="sm" disabled={busy || !connected} onClick={() => void action(() => localParticipant.setCameraEnabled(!isCameraEnabled))} aria-pressed={isCameraEnabled} aria-label={isCameraEnabled ? 'Turn camera off' : 'Turn camera on'}>{isCameraEnabled ? <Video /> : <VideoOff />}Camera</Button>
           <Button variant={isMicrophoneEnabled ? 'secondary' : 'outline'} size="sm" disabled={busy || !connected} onClick={() => void action(() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled))} aria-pressed={isMicrophoneEnabled} aria-label={isMicrophoneEnabled ? 'Mute microphone' : 'Enable microphone'}>{isMicrophoneEnabled ? <Mic /> : <MicOff />}Mic</Button>
           <Button variant={isScreenShareEnabled ? 'secondary' : 'outline'} size="sm" disabled={busy || !connected || !screenSupported} aria-pressed={isScreenShareEnabled} onClick={() => void action(() => localParticipant.setScreenShareEnabled(!isScreenShareEnabled, { audio: true }))}><MonitorUp />{isScreenShareEnabled ? 'Stop sharing' : 'Share screen'}</Button>
-          <Button variant="outline" size="sm" className="sm:ml-auto" onClick={() => { void room.disconnect(); onLeave(); }}><LogOut />Leave</Button>
+          <Button variant="outline" size="sm" disabled={busy} className="sm:ml-auto" onClick={() => void action(async()=>{await leaveAttendance(info.id,musicSession);onLeave();await room.disconnect();})}><LogOut />Leave</Button>
           {info.isHost && <Button variant="destructive" size="sm" disabled={busy} onClick={() => setConfirmEnd(true)}>End room</Button>}
         </div>
         {!screenSupported && <p className="mt-3 text-xs text-muted-foreground">Screen sharing is unavailable in this browser. Try desktop Chrome or Edge over HTTPS.</p>}
@@ -124,6 +127,6 @@ export function Studio({ info, musicSession, view, onViewChange, onKnockedOut, o
         </Dialog>}
       </section>
       <aside className="min-w-0 space-y-4"><Chat /><MusicPanel id={info.id} session={musicSession} isHost={info.isHost} /></aside>
-    </main>
+    </main></AttendanceProvider>
   );
 }
