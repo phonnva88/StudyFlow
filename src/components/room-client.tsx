@@ -72,6 +72,26 @@ export function RoomClient({ id }: { id: string }) {
   const [ended, setEnded] = useState(false);
   const [view, setView] = useState<RoomView>('grid');
   const knockedOut = useRef(false);
+  const resumeAttempted = useRef(false);
+  const storageKey = `studyflow-visit:${id}`;
+  function forgetVisit() { try { sessionStorage.removeItem(storageKey); } catch {} }
+  const canResume=!!info && !ended;
+  useEffect(()=>{
+    if(!canResume || resumeAttempted.current) return;
+    let saved;
+    try { saved=JSON.parse(sessionStorage.getItem(`studyflow-visit:${id}`) || 'null'); } catch { return; }
+    if(!saved?.session || typeof saved.nickname!=='string') return;
+    let disposed=false;
+    const initial=setTimeout(()=>{
+    resumeAttempted.current=true;setBusy(true);
+    void api(`/api/rooms/${id}/token`,{nickname:saved.nickname,resumeSession:saved.session}).then(next=>{
+      if(disposed) return;
+      try { sessionStorage.setItem(`studyflow-visit:${id}`,JSON.stringify({session:next.musicSession,nickname:saved.nickname})); } catch {}
+      setSession(next);
+    }).catch(()=>{if(!disposed) setError('Unable to resume automatically. Join again to retry.');}).finally(()=>{if(!disposed) setBusy(false);});
+    },0);
+    return()=>{disposed=true;clearTimeout(initial);};
+  },[id,canResume]);
 
   const load = useCallback(async () => {
     try {
@@ -100,7 +120,12 @@ export function RoomClient({ id }: { id: string }) {
     setError('');
     knockedOut.current = false;
     try {
-      setSession(await api(`/api/rooms/${id}/token`, { nickname: info?.isHost ? info.hostName : nickname }));
+      const name=info?.isHost ? info.hostName : nickname;
+      let resumeSession;
+      try { resumeSession=JSON.parse(sessionStorage.getItem(storageKey) || 'null')?.session; } catch {}
+      const next=await api(`/api/rooms/${id}/token`, { nickname:name,resumeSession });
+      try { sessionStorage.setItem(storageKey,JSON.stringify({session:next.musicSession,nickname:name})); } catch {}
+      setSession(next);
     } catch (e) { setError(e instanceof Error ? e.message : 'Unable to join.'); }
     finally { setBusy(false); }
   }
@@ -160,8 +185,8 @@ export function RoomClient({ id }: { id: string }) {
           ) : (
             <LiveKitRoom token={session.token} serverUrl={session.serverUrl} connect audio={false} video={false}
               onError={() => { setSession(null); setError('Unable to connect. Rooms allow up to 6 participants. Check your connection; if the room is full, wait for someone to leave and try again.'); }}
-              onDisconnected={reason => { setSession(null); setError(current => current || (knockedOut.current ? 'You were punched out of your chair and removed from the room. You can rejoin while it is open.' : reason === DisconnectReason.PARTICIPANT_REMOVED ? 'You were removed from this room. You can rejoin while it is open.' : 'You disconnected. You can rejoin while the room is active.')); }}>
-              <Studio info={{ ...info, isHost: session.isHost }} musicSession={session.musicSession} view={view} onViewChange={setView} onKnockedOut={() => { knockedOut.current = true; }} onLeave={() => { setSession(null); setError('You left the room. You can rejoin while it is open.'); }} onEnded={() => { setEnded(true); setSession(null); }} />
+              onDisconnected={reason => { if(knockedOut.current || reason===DisconnectReason.PARTICIPANT_REMOVED) forgetVisit(); setSession(null); setError(current => current || (knockedOut.current ? 'You were punched out of your chair and removed from the room. You can rejoin while it is open.' : reason === DisconnectReason.PARTICIPANT_REMOVED ? 'You were removed from this room. You can rejoin while it is open.' : 'You disconnected. You can rejoin while the room is active.')); }}>
+              <Studio info={{ ...info, isHost: session.isHost }} musicSession={session.musicSession} view={view} onViewChange={setView} onKnockedOut={() => { knockedOut.current = true; }} onLeave={() => { forgetVisit();setSession(null); setError('You left the room. You can rejoin while it is open.'); }} onEnded={() => { forgetVisit();setEnded(true); setSession(null); }} />
               {(error || loadError) && <div className="mx-auto my-4 max-w-7xl px-5 text-sm text-destructive" role="alert">{error || loadError}</div>}
             </LiveKitRoom>
           )}
